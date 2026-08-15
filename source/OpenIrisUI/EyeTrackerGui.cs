@@ -167,8 +167,14 @@ namespace OpenIris.UI
                 // Data Bindings with settings
                 //
                 textBoxSession.DataBindings.Add(nameof(textBoxSession.Text), eyeTracker.Settings, nameof(eyeTracker.Settings.SessionName));
-                linkLabelDataFolder.DataBindings.Add(nameof(linkLabelDataFolder.Text), eyeTracker.Settings, nameof(eyeTracker.Settings.DataFolder));
-                linkLabelDataFolder2.DataBindings.Add(nameof(linkLabelDataFolder2.Text), eyeTracker.Settings, nameof(eyeTracker.Settings.DataFolder));
+                UpdateDataFolderLabels(settings.DataFolder);
+                settings.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(settings.DataFolder))
+                    {
+                        UpdateDataFolderLabels(settings.DataFolder);
+                    }
+                };
 
                 //
                 // Other event handlers not worth a command
@@ -207,6 +213,20 @@ namespace OpenIris.UI
                 timerRefreshUI.Enabled = false;
                 MessageBox.Show("GUI:Load: " + ex.ToString());
             }
+        }
+
+        private void UpdateDataFolderLabels(string dataFolder)
+        {
+            if (IsDisposed || Disposing) return;
+
+            if (InvokeRequired)
+            {
+                BeginInvoke((MethodInvoker)(() => UpdateDataFolderLabels(dataFolder)));
+                return;
+            }
+
+            linkLabelDataFolder.Text = dataFolder;
+            linkLabelDataFolder2.Text = dataFolder;
         }
 
         private void UpdateUI()

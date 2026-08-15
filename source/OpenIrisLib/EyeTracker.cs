@@ -456,6 +456,15 @@ namespace OpenIris
         /// <summary>
         /// Start recording.
         /// </summary>
+        /// <param name="dataFolder">The path to the data folder.</param>
+        public void SetDataFolder(string dataFolder)
+        {
+            Settings.DataFolder = dataFolder;
+        }
+
+        /// <summary>
+        /// Start recording.
+        /// </summary>
         public async Task StartRecording()
         {
             Trace.WriteLine("StartRecordingAsync");
