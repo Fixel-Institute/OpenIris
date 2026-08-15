@@ -11,6 +11,7 @@ using SpinnakerNET;
 using SpinnakerNET.GenApi;
 using static System.Net.Mime.MediaTypeNames;
 using static OpenIris.EyeTrackerExtentionMethods;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace SpinnakerInterface
 {
@@ -58,6 +59,8 @@ namespace SpinnakerInterface
         private Point offset;
         public double Gain { get { return gain; } set { gain = value; } }
         private double gain;
+        public bool Flip { get { return flip; } set { flip = value; } }
+        private bool flip;
 
         #region Static Methods
 
@@ -116,13 +119,14 @@ namespace SpinnakerInterface
         #endregion Static Methods
 
         #region constructor
-        public CameraEyeSpinnaker(Eye whichEye, IManagedCamera camera, double frameRate, int gain, Rectangle roi)
+        public CameraEyeSpinnaker(Eye whichEye, IManagedCamera camera, double frameRate, int gain, Rectangle roi, bool flip)
         {
             cam = camera;
 
             WhichEye = whichEye;
             FrameRate = frameRate;
             this.gain = gain;
+            this.flip = flip;
             FrameSize = roi.Size;
 
             isMaster = TriggerMode.Default;
@@ -269,6 +273,8 @@ namespace SpinnakerInterface
             cam.OffsetY.Value = 0;
             cam.Width.Value = FrameSize.Width;
             cam.Height.Value = FrameSize.Height;
+            cam.ReverseX.Value = this.flip;
+            cam.ReverseY.Value = this.flip;
 
             Vector2 maxFrameSize = new Vector2(cam.WidthMax.Value, cam.HeightMax.Value);
             roiSize = new Vector2(FrameSize.Width, FrameSize.Height);

@@ -32,11 +32,13 @@ namespace SpinnakerInterface
                 var cameraList = CameraEyeSpinnaker.FindCameras(1, settings.Eye, settings.CameraSerialNumber, null);
 
                 camera = new CameraEyeSpinnaker(
-                whichEye: Settings.Eye,
-                camera: cameraList[0],
-                frameRate: (double)settings.FrameRate,
-                gain: (int)settings.Gain,
-                roi: new Rectangle { Width = 720, Height = 450 });
+                    whichEye: Settings.Eye,
+                    camera: cameraList[0],
+                    frameRate: (double)settings.FrameRate,
+                    gain: (int)settings.Gain,
+                    roi: new Rectangle { Width = 720, Height = 450 },
+                    flip: false
+                );
                 
                 settings.CameraSerialNumber = cameraList[0].DeviceSerialNumber.ToString();
 

@@ -36,18 +36,22 @@ namespace SpinnakerInterface
                 // TODO for Roksana add checks on the settings so things don't crash if somebody enters crazy numbers
 
                 leftEyeCamera = new CameraEyeSpinnaker(
-                whichEye: Eye.Left,
-                camera: cameraList[0],
-                frameRate: (double)settings.FrameRate,
-                gain: (int)settings.Gain,
-                roi: new Rectangle { X=settings.LeftOffset.X, Y=settings.LeftOffset.Y, Width = 720, Height = 450 });
+                    whichEye: Eye.Left,
+                    camera: cameraList[0],
+                    frameRate: (double)settings.FrameRate,
+                    gain: (int)settings.Gain,
+                    roi: new Rectangle { X=settings.LeftOffset.X, Y=settings.LeftOffset.Y, Width = 720, Height = 450 },
+                    flip: settings.LeftEyeFlip
+                );
 
                 rightEyeCamera = new CameraEyeSpinnaker(
-                whichEye: Eye.Right,
-                camera: cameraList[1],
-                frameRate: (double)settings.FrameRate,
-                gain: (int)settings.Gain,
-                roi: new Rectangle { X = settings.RightOffset.X, Y = settings.RightOffset.Y, Width = 720, Height = 450 });
+                    whichEye: Eye.Right,
+                    camera: cameraList[1],
+                    frameRate: (double)settings.FrameRate,
+                    gain: (int)settings.Gain,
+                    roi: new Rectangle { X = settings.RightOffset.X, Y = settings.RightOffset.Y, Width = 720, Height = 450 },
+                    flip: settings.RightEyeFlip
+                );
 
                 settings.LeftEyeCameraSerialNumber = cameraList[0].DeviceSerialNumber.ToString();
                 settings.RightEyeCameraSerialNumber = cameraList[1].DeviceSerialNumber.ToString();
@@ -137,6 +141,14 @@ namespace SpinnakerInterface
         [Category("Camera properties"), Description("RightEye - CameraSerialNumber")]
         public string RightEyeCameraSerialNumber { get => this.rightEyeCameraSerialNumber; set => SetProperty(ref rightEyeCameraSerialNumber, value, nameof(RightEyeCameraSerialNumber)); }
         private string rightEyeCameraSerialNumber = null;
+
+        [Category("Camera properties"), Description("LeftEye Flip")]
+        public bool LeftEyeFlip { get => leftEyeFlip; set => SetProperty(ref leftEyeFlip, value, nameof(LeftEyeFlip)); }
+        private bool leftEyeFlip = false;
+
+        [Category("Camera properties"), Description("RightEye Flip")]
+        public bool RightEyeFlip { get => rightEyeFlip; set => SetProperty(ref rightEyeFlip, value, nameof(RightEyeFlip)); }
+        private bool rightEyeFlip = false;
 
         //[NeedsRestarting]
         [ReadOnly(true)]

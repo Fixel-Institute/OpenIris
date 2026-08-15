@@ -78,6 +78,23 @@ namespace OpenIris
         public EyeTrackingPipelineSettings? PipelineSettings => eyeTracker?.Settings.TrackingPipelineSettings;
 
         /// <summary>
+        /// Starts the tracking.
+        /// The Trigger TTL will start when tracking starts, and not the recording itself.
+        /// </summary>
+        public void StartTracking()
+        {
+            _ = eyeTracker.StartTracking();
+        }
+
+        /// <summary>
+        /// Stops the tracking.
+        /// </summary>
+        public void StopTracking()
+        {
+            eyeTracker.StopTracking();
+        }
+
+        /// <summary>
         /// Starts the recording.
         /// </summary>
         public void StartRecording()
@@ -91,6 +108,11 @@ namespace OpenIris
         public void StopRecording()
         {
             eyeTracker.StopRecording();
+        }
+
+        public void SetDataFolder(string folder)
+        {
+            eyeTracker.SetDataFolder(folder);
         }
 
         /// <summary>
@@ -460,6 +482,16 @@ namespace OpenIris
             var data = bar_idx == -1 ? string.Empty : stringMessage.Substring(bar_idx + 1);
             switch (command.ToUpper())
             {
+                case "STARTTRACKING":
+                    StartTracking();
+                    return bytesToSend;
+                case "STOPTRACKING":
+                    StopTracking();
+                    return bytesToSend;
+                case "SETDATAFOLDER":
+                    Debug.WriteLine("Setting data folder");
+                    SetDataFolder(data);
+                    return bytesToSend;
                 case "STARTRECORDING":
                     StartRecording();
                     return bytesToSend;
