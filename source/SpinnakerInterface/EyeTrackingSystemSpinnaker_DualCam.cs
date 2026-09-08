@@ -41,7 +41,7 @@ namespace SpinnakerInterface
                     frameRate: (double)settings.FrameRate,
                     gain: (int)settings.Gain,
                     roi: new Rectangle { X=settings.LeftOffset.X, Y=settings.LeftOffset.Y, Width = 720, Height = 450 },
-                    flip: settings.LeftEyeFlip
+                    orientation: settings.LeftEyeOrientation
                 );
 
                 rightEyeCamera = new CameraEyeSpinnaker(
@@ -50,7 +50,7 @@ namespace SpinnakerInterface
                     frameRate: (double)settings.FrameRate,
                     gain: (int)settings.Gain,
                     roi: new Rectangle { X = settings.RightOffset.X, Y = settings.RightOffset.Y, Width = 720, Height = 450 },
-                    flip: settings.RightEyeFlip
+                    orientation: settings.RightEyeOrientation
                 );
 
                 settings.LeftEyeCameraSerialNumber = cameraList[0].DeviceSerialNumber.ToString();
@@ -75,6 +75,7 @@ namespace SpinnakerInterface
             rightEyeCamera?.Stop();
             rightEyeCamera?.Dispose();
         }
+        
         public override EyeTrackerImagesAndData PostProcessImagesAndData(EyeTrackerImagesAndData processedImages)
         {
             ExtraData extraData = new ExtraData();
@@ -142,13 +143,13 @@ namespace SpinnakerInterface
         public string RightEyeCameraSerialNumber { get => this.rightEyeCameraSerialNumber; set => SetProperty(ref rightEyeCameraSerialNumber, value, nameof(RightEyeCameraSerialNumber)); }
         private string rightEyeCameraSerialNumber = null;
 
-        [Category("Camera properties"), Description("LeftEye Flip")]
-        public bool LeftEyeFlip { get => leftEyeFlip; set => SetProperty(ref leftEyeFlip, value, nameof(LeftEyeFlip)); }
-        private bool leftEyeFlip = false;
+        [Category("Camera properties"), Description("LeftEye Orientation")]
+        public CameraOrientation LeftEyeOrientation { get => leftEyeOrientation; set => SetProperty(ref leftEyeOrientation, value, nameof(LeftEyeOrientation)); }
+        private CameraOrientation leftEyeOrientation = CameraOrientation.Upright;
 
-        [Category("Camera properties"), Description("RightEye Flip")]
-        public bool RightEyeFlip { get => rightEyeFlip; set => SetProperty(ref rightEyeFlip, value, nameof(RightEyeFlip)); }
-        private bool rightEyeFlip = false;
+        [Category("Camera properties"), Description("RightEye Orientation")]
+        public CameraOrientation RightEyeOrientation { get => rightEyeOrientation; set => SetProperty(ref rightEyeOrientation, value, nameof(RightEyeOrientation)); }
+        private CameraOrientation rightEyeOrientation = CameraOrientation.Upright;
 
         //[NeedsRestarting]
         [ReadOnly(true)]

@@ -61,6 +61,8 @@ namespace SpinnakerInterface
         private double gain;
         public bool Flip { get { return flip; } set { flip = value; } }
         private bool flip;
+        public CameraOrientation Orientation { get { return orientation; } set { orientation = value; } }
+        private CameraOrientation orientation;
 
         #region Static Methods
 
@@ -119,15 +121,16 @@ namespace SpinnakerInterface
         #endregion Static Methods
 
         #region constructor
-        public CameraEyeSpinnaker(Eye whichEye, IManagedCamera camera, double frameRate, int gain, Rectangle roi, bool flip)
+        public CameraEyeSpinnaker(Eye whichEye, IManagedCamera camera, double frameRate, int gain, Rectangle roi, CameraOrientation orientation)
         {
             cam = camera;
 
             WhichEye = whichEye;
             FrameRate = frameRate;
             this.gain = gain;
-            this.flip = flip;
+            this.flip = false;
             FrameSize = roi.Size;
+            this.CameraOrientation = orientation;
 
             isMaster = TriggerMode.Default;
             cam.Init();
