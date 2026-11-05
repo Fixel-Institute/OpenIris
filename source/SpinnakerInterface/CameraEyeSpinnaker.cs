@@ -1,16 +1,17 @@
-﻿using System;
+﻿using OpenIris;
+using OpenIris.ImageGrabbing;
+using SpinnakerNET;
+using SpinnakerNET.GenApi;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Numerics;
+using System.Runtime;
 using System.Threading.Tasks;
-using OpenIris;
-using OpenIris.ImageGrabbing;
-using SpinnakerNET;
-using SpinnakerNET.GenApi;
-using static System.Net.Mime.MediaTypeNames;
 using static OpenIris.EyeTrackerExtentionMethods;
+using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace SpinnakerInterface
@@ -61,6 +62,7 @@ namespace SpinnakerInterface
         private double gain;
         public bool Flip { get { return flip; } set { flip = value; } }
         private bool flip;
+        private bool isRotated;
         public CameraOrientation Orientation { get { return orientation; } set { orientation = value; } }
         private CameraOrientation orientation;
 
@@ -129,8 +131,21 @@ namespace SpinnakerInterface
             FrameRate = frameRate;
             this.gain = gain;
             this.flip = false;
-            FrameSize = roi.Size;
             this.CameraOrientation = orientation;
+            this.isRotated = false;
+
+            if (this.CameraOrientation == CameraOrientation.Rotated90 || 
+                this.CameraOrientation == CameraOrientation.Rotated270 || 
+                this.CameraOrientation == CameraOrientation.Rotated90Mirrored ||
+                this.CameraOrientation == CameraOrientation.Rotated270Mirrored)
+            {
+                FrameSize = new Size{Width = 448, Height = 720};
+                this.isRotated = true;
+            }
+            else
+            {
+                FrameSize = roi.Size;
+            }
 
             isMaster = TriggerMode.Default;
             cam.Init();
@@ -280,6 +295,9 @@ namespace SpinnakerInterface
             cam.ReverseY.Value = this.flip;
 
             Vector2 maxFrameSize = new Vector2(cam.WidthMax.Value, cam.HeightMax.Value);
+            if (this.isRotated) {
+                maxFrameSize = new Vector2(cam.HeightMax.Value, cam.WidthMax.Value);
+            }
             roiSize = new Vector2(FrameSize.Width, FrameSize.Height);
             maxROI_Offset = maxFrameSize - roiSize;
 
