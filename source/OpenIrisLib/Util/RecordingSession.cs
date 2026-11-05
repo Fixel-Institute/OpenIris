@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackerRecorder.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -9,10 +10,10 @@ namespace OpenIris
 
     using Emgu.CV;
     using Emgu.CV.Structure;
-    using OpenIris.UI;
     using System;
     using System.Diagnostics;
     using System.Drawing;
+    using System.Globalization;
     using System.IO;
     using System.Linq;
     using System.Threading.Tasks;
@@ -39,11 +40,24 @@ namespace OpenIris
 
         private EyeCollection<VideoWriter?>? rawVideoWriters;
         private VideoWriter? processedVideoWriter;
+        private readonly System.Collections.Generic.Dictionary<Eye, VideoFrameBuffer> rawFrameBuffers = new();
+        private Size rawVideoSize;
+        private readonly int[] rawVideoFrameCounts = new int[2];
+        private StreamWriter? rawVideoFramesFile;
+        private VideoFrameBuffer? processedFrameBuffer;
         private StreamWriter? eventFile;
         private StreamWriter? dataFile;
+        private StreamWriter? calibratedDataFile;
         private EyeTrackerLog? log;
 
+        // RangeToRecord will keep track fo the range of frame numbers that need to be recorded.
+        // Initially is unknown (empty). As soon as the first image frame comes that will be the begining
+        // of the range the end of the range might be the last image frame recorded at the time
+        // the order to stop recording is recieved. Or it can be set specifically at the stop
+        // recording for some future frame number. Frames can come as soon as the session is
+        // visible to the eye tracker, before Start, so Start must not reset it (see #76).
         private Range RangeToRecord;
+        private volatile bool stopRequested;
         private Task? recordingTask;
         private bool started;
 
@@ -70,6 +84,17 @@ namespace OpenIris
         /// Filename of the datafile.
         /// </summary>
         public string DataFileName { get; }
+
+        // How many items a recorder wrote, and how many it lost because writing couldn't keep up:
+        // "1520 frames written, none lost".
+        private static string Written<T>(Consumer<T> recorder, string items) =>
+            $"{recorder.ConsumedCount} {items} written, " +
+            (recorder.DroppedCount > 0 ? $"{recorder.DroppedCount} lost (writing fell behind)" : "none lost");
+
+        /// <summary>
+        /// What to write at the beginning of the log of this recording (see RecordingInfo).
+        /// </summary>
+        internal string Describe(EyeTracker eyeTracker, ProcessVideoOptions? videos = null) => RecordingInfo.Describe(eyeTracker, DataFileName, options, videos);
 
         /// <summary>
         /// Gets the total time spent recording.
@@ -135,29 +160,26 @@ namespace OpenIris
         /// </summary>
         /// <param name="calibration">Current calibration.</param>
         /// <param name="settings">Current settings of the eye tracker.</param>
-        internal async Task Start(CalibrationParameters calibration, EyeTrackerSettings settings)
+        /// <param name="info">What to write at the beginning of the log of the recording (RecordingInfo).</param>
+        internal async Task Start(CalibrationParameters calibration, EyeTrackerSettings settings, string? info = null)
         {
             if (started) throw new InvalidOperationException("Cannot start a new recording. Another recording is in process.");
             started = true;
 
             settings.LastRecordedFile = DataFileName;
 
-            // RangeToRecord will keep track fo the range of frame numbers that need to be recorded.
-            // Initially is unknown. As soon as the first image frame comes that will be the begining
-            // of the range the end of the range might be the last image frame recorded at the time
-            // the order to stop recording is recieved. Or it can be set specifically at the stop
-            // recording for some future frame number.
-            RangeToRecord = new Range();
-
             try
             {
                 var errorHandler = new TaskErrorHandler(Stop);
-                log = EyeTrackerLog.Create(DataFileName.Replace(".txt", "-log.log"));
 
-                // Create new folder and save calibration and settings
+                // The folder first: the log opens its file when it writes.
+                Directory.CreateDirectory(Path.GetDirectoryName(DataFileName));
+                log = EyeTrackerLog.Create(DataFileName.Replace(".txt", "-log.log"));
+                if (info is not null) log.WriteBlock(info);
+
+                // Save calibration and settings
                 await Task.Run(() =>
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(DataFileName));
                     calibration.Save(DataFileName.Replace(".txt", ".cal"));
                     settings.Save(DataFileName.Replace(".txt", "-settings.xml"));
                 });
@@ -172,10 +194,11 @@ namespace OpenIris
 
                 errorHandler.CheckForErrors();
 
-                Trace.WriteLine($"Type of Recorder -> (Frames to record >> Frames not dropped >> Fames recorded)");
-                Trace.WriteLine($"RawFramesRecorder -> ({rawFramesRecorder.TryAddedCount} >> {rawFramesRecorder.AddedCount} >> {rawFramesRecorder.ConsumedCount})");
-                Trace.WriteLine($"ProcessedFramesRecorder -> ({processedFramesRecorder.TryAddedCount} >> {processedFramesRecorder.AddedCount} >> {processedFramesRecorder.ConsumedCount})");
-                Trace.WriteLine($"EventRecorder -> ({eventRecorder.TryAddedCount} >> {eventRecorder.AddedCount} >> {eventRecorder.ConsumedCount})");
+                Trace.WriteLine("Recording finished.");
+                log?.WriteBlock(RecordingInfo.Summary(TimeRecorded,
+                    Written(processedFramesRecorder, "frames"),
+                    options.SaveRawVideo ? Written(rawFramesRecorder, "frames") : "not recorded",
+                    Written(eventRecorder, "events")));
             }
             catch
             {
@@ -193,12 +216,20 @@ namespace OpenIris
                 {
                     rawVideoWriters?.ForEach(v => v?.Dispose());
                     rawVideoWriters = null;
+                    foreach (var buffer in rawFrameBuffers.Values) buffer.Dispose();
+                    rawFrameBuffers.Clear();
+                    rawVideoFramesFile?.Dispose();
+                    rawVideoFramesFile = null;
 
                     dataFile?.Dispose();
                     dataFile = null;
+                    calibratedDataFile?.Dispose();
+                    calibratedDataFile = null;
 
                     processedVideoWriter?.Dispose();
                     processedVideoWriter = null;
+                    processedFrameBuffer?.Dispose();
+                    processedFrameBuffer = null;
 
                     eventFile?.Dispose();
                     eventFile = null;
@@ -259,6 +290,16 @@ namespace OpenIris
         }
 
         /// <summary>
+        /// Stop the recording at the last frame recorded in the video. The stop is applied with the
+        /// next grabbed frame, by the thread that adds the raw frames, so no frame can be half
+        /// added when the last frame is decided (see #76).
+        /// </summary>
+        internal void StopAtLastFrameInVideo()
+        {
+            stopRequested = true;
+        }
+
+        /// <summary>
         /// Records new raw frames. If buffer is full it will drop the frame.
         /// </summary>
         /// <param name="images">Frames to be recorded.</param>
@@ -269,6 +310,13 @@ namespace OpenIris
             if (rawFramesRecorder is null) throw new InvalidOperationException("Recorder not ready.");
 
             var frameNumber = images.GetFrameNumber();
+
+            if (stopRequested)
+            {
+                stopRequested = false;
+                Stop(rawFramesRecorder.LastItemAdded);
+                return false;
+            }
 
             // If starting recording we must wait until we get the first raw image because they come
             // before the processed images by definition. If the range is not sent from outside.
@@ -315,8 +363,11 @@ namespace OpenIris
         {
             if (eventRecorder is null) throw new InvalidOperationException("Recorder not ready.");
 
-            if (RangeToRecord.DoesNotContain(frameNumber)) return false;
-            
+            // Only drop events after the end of the recording. The range is empty until the first
+            // frame is recorded, and an event sent right after starting the recording (for example
+            // the start of a trial) may come before that frame. It belongs to the recording too.
+            if (!RangeToRecord.IsEmpty && frameNumber > RangeToRecord.End) return false;
+
             return eventRecorder.TryAdd(new EyeTrackerEvent(eventMessage, frameNumber, data), frameNumber);
         }
 
@@ -330,38 +381,65 @@ namespace OpenIris
             // up time of the consumer is fast and it can receive items in the queue very quickly.
             // Also, it allows for reading the frame size directly from the images, no need to pass
             // it as a parameter.
-            rawVideoWriters ??= new EyeCollection<VideoWriter?>(
+            if (rawVideoWriters is null)
+            {
+                // Both videos have the same size.
+                var sizes = imagesEye.images.Where(im => im is not null).Select(im => im!.Size).Distinct().ToArray();
+                if (sizes.Length > 1) throw new InvalidOperationException("The left and right images must have the same size to record videos.");
+                rawVideoSize = sizes.FirstOrDefault();
+
+                rawVideoWriters = new EyeCollection<VideoWriter?>(
                     imagesEye.images.Select(im => (im is null) ? null :
                         new VideoWriter(
                            fileName: DataFileName.Replace(".txt", "-" + im.WhichEye + ".avi"),
                            compressionCode: 0,
                            fps: imagesEye.frameRate / options.DecimateRatioRawVideo,
-                           size: imagesEye.images.GetFrameSize(),
+                           size: rawVideoSize,
                            isColor: false)).ToArray());
 
-            // Record the images
+                rawVideoFramesFile = new StreamWriter(DataFileName.Replace(".txt", "-videoframes.txt"));
+                rawVideoFramesFile.WriteLine("FrameNumber LeftVideoFrame RightVideoFrame");
+            }
+
+            // Record the images, and where each one went in its video. Frames that aren't written
+            // are NaN, so a video frame can always be matched with its line of data.
+            var positions = new string[] { "NaN", "NaN" };
             foreach (var image in imagesEye.images)
             {
                 if (image is null) continue;
 
-                rawVideoWriters[image.WhichEye]?.Write(image.Image.Mat);
+                var writer = rawVideoWriters[image.WhichEye];
+                if (writer is null) continue;
+
+                // VideoWriter silently drops frames of a different size than the video's.
+                if (image.Size != rawVideoSize) continue;
+
+                if (!rawFrameBuffers.TryGetValue(image.WhichEye, out var buffer)) rawFrameBuffers[image.WhichEye] = buffer = new VideoFrameBuffer();
+                VideoTools.WriteFrame(writer, image.Image, buffer);
+
+                positions[(int)image.WhichEye] = rawVideoFrameCounts[(int)image.WhichEye]++.ToString(CultureInfo.InvariantCulture);
             }
+
+            rawVideoFramesFile?.WriteLine($"{imagesEye.images.GetFrameNumber()} {positions[0]} {positions[1]}");
             return true;
         }
 
         private bool RecordDataAndProcessedImages((EyeTrackerImagesAndData dataAndImages, double frameRate) images)
         {
             //
-            // Save the data to text file
+            // Save the data to text files: raw, and calibrated (see docs/user-manual/data-file.md)
             // 
             if (dataFile is null)
             {
-                // Open the file and write the header the first time
+                // Open the files and write the headers the first time
                 dataFile = new StreamWriter(DataFileName);
                 dataFile.WriteLine(EyeTrackerData.GetStringHeader());
+                calibratedDataFile = new StreamWriter(DataFileName.Replace(".txt", "-calibrated.txt"));
+                calibratedDataFile.WriteLine(EyeTrackerData.GetCalibratedStringHeader());
             }
 
             dataFile.WriteLine(images.dataAndImages.Data?.GetStringLine() ?? string.Empty);
+            calibratedDataFile?.WriteLine(images.dataAndImages.Data?.GetCalibratedStringLine() ?? string.Empty);
 
             //
             // Save the images to a video file with data overlay
@@ -372,14 +450,6 @@ namespace OpenIris
 
             if (processedVideoOptions?.SaveProcessedVideo is true)
             {
-                // Open the video
-                processedVideoWriter ??= new VideoWriter(
-                            fileName: DataFileName.Replace(".txt", ".avi"),
-                            compressionCode: 0,
-                            fps: images.frameRate,
-                            size: images.dataAndImages.Images.GetFrameSize(),
-                            isColor: true);
-
                 // Save the processed video
                 var imagesColor = images.dataAndImages.Images
                     .Where(im => im is not null)
@@ -391,10 +461,10 @@ namespace OpenIris
 
                     if (eyeData is null) continue;
 
-                    var eyeModel = images.dataAndImages.Calibration.EyeCalibrationParameters[eyeData.WhichEye].EyePhysicalModel;
-                    if (processedVideoOptions.AddPupilCross) ImageEyeBox.DrawCross(imageColor, eyeData);
-                    if (processedVideoOptions.AddCRCross) ImageEyeBox.DrawCR(imageColor, eyeData);
-                    if (processedVideoOptions.AddEyelids) ImageEyeBox.DrawEyelids(imageColor, eyeData, eyeModel);
+                    var eyeModel = images.dataAndImages.Calibration.EyeCalibrationParameters[eyeData.WhichEye].EyeModelFor(eyeData.Intrinsics);
+                    if (processedVideoOptions.AddPupilCross) EyeImageOverlay.DrawCross(imageColor, eyeData);
+                    if (processedVideoOptions.AddCRCross) EyeImageOverlay.DrawCR(imageColor, eyeData);
+                    if (processedVideoOptions.AddEyelids) EyeImageOverlay.DrawEyelids(imageColor, eyeData, eyeModel);
                 }
 
                 using var imageForVideo = imagesColor.Count() switch
@@ -404,7 +474,17 @@ namespace OpenIris
                     _ => throw new InvalidOperationException("Invalid option"),
                 };
 
-                processedVideoWriter.Write(imageForVideo.Mat);
+                // Open the video with the size of the frames written. With both eyes the frame is
+                // twice as wide as one eye image, and VideoWriter silently drops frames of a
+                // different size, leaving an empty video.
+                processedVideoWriter ??= new VideoWriter(
+                            fileName: DataFileName.Replace(".txt", ".avi"),
+                            compressionCode: 0,
+                            fps: images.frameRate,
+                            size: imageForVideo.Size,
+                            isColor: true);
+
+                VideoTools.WriteFrame(processedVideoWriter, imageForVideo, processedFrameBuffer ??= new VideoFrameBuffer());
             }
             return true;
         }
@@ -435,9 +515,11 @@ namespace OpenIris
             processedFramesRecorder.Dispose();
             eventRecorder.Dispose();
             rawVideoWriters?.ForEach(v => v?.Dispose());
+            rawVideoFramesFile?.Dispose();
             processedVideoWriter?.Dispose();
             eventFile?.Dispose();
             dataFile?.Dispose();
+            calibratedDataFile?.Dispose();
             log?.Dispose();
 
             rawVideoWriters = null;
@@ -445,6 +527,7 @@ namespace OpenIris
             processedVideoWriter = null;
             eventFile = null;
             dataFile = null;
+            calibratedDataFile = null;
             log = null;
         }
     }

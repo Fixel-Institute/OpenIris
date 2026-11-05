@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CameraEye.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageGrabbing
@@ -26,6 +27,19 @@ namespace OpenIris.ImageGrabbing
         public Size FrameSize { get; protected set; }
 
         /// <summary>
+        /// Gets the size of the whole sensor, in pixels. The frame size, unless the camera reads only a
+        /// window of the sensor.
+        /// </summary>
+        public virtual Size SensorSize => FrameSize;
+
+        /// <summary>
+        /// Gets or sets the intrinsics of the camera for the whole sensor, as the camera sends the images
+        /// (before the camera orientation). The eye tracking system sets them from its settings. Each
+        /// image gets them moved to its window and turned with the orientation (ImageEye.Intrinsics).
+        /// </summary>
+        public CameraIntrinsics Intrinsics { get; set; }
+
+        /// <summary>
         /// Gets left or right eye (or both).
         /// </summary>
         public Eye WhichEye { get; set; }
@@ -44,6 +58,12 @@ namespace OpenIris.ImageGrabbing
         /// Gets the diagnostics info.
         /// </summary>
         public virtual object Info { get { return string.Empty; } }
+
+        /// <summary>
+        /// Gets what the camera is (model, serial number, firmware...), for the log of each
+        /// recording. Empty if the camera doesn't say.
+        /// </summary>
+        public string Description { get; protected set; } = string.Empty;
 
         /// <summary>
         /// Overrides the StartCapture method.
@@ -88,6 +108,10 @@ namespace OpenIris.ImageGrabbing
 
             // Keep track of the last frame number
             LastFrameNumber = image.TimeStamp.FrameNumber;
+
+            // The whole frame, for cameras that don't say which part of the sensor they read.
+            if (image.Roi.IsEmpty) image.Roi = new Rectangle(Point.Empty, image.Size);
+            image.Intrinsics = Intrinsics.Cropped(image.Roi.Location);
 
             image.CorrectOrientation(CameraOrientation);
 

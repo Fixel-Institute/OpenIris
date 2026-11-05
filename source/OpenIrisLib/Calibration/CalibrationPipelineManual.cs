@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
-// <copyright file="CalibrationSession.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+// <copyright file="CalibrationPipelineManual.cs">
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -14,40 +15,46 @@ namespace OpenIris
     [Export(typeof(CalibrationPipelineBase)), PluginDescription("Manual Calibration", typeof(CalibrationSettings))]
     public class CalibrationPipelineManual : CalibrationPipelineBase
     {
-        private CalibrationPipelineManualUI? ui;
+        /// <summary>
+        /// Last image of each eye, for the user interface to show while the user sets the eye models.
+        /// </summary>
+        public EyeCollection<ImageEye?> LastImages { get; } = new EyeCollection<ImageEye?>(null, null);
 
         /// <summary>
-        /// User interface of the calibration.
+        /// Eye models chosen by the user. The calibration of the eye models ends once they are set.
         /// </summary>
-        public override ICalibrationUIControl? GetCalibrationUI()
-        {
-            
-            return ui;
-        }
+        public EyeCollection<EyePhysicalModel>? EyeModels { get; set; }
 
-        public override (bool modelCalibrationCompleted, EyePhysicalModel model) ProcessForEyeModel(ImageEye image, EyeTrackingPipelineSettings processingSettings)
+        /// <summary>
+        /// Keeps the last images for the user interface, until the user sets the eye models.
+        /// </summary>
+        public override (bool completed, CalibrationParameters? calibration) ProcessForCalibrationModel(EyeTrackerImagesAndData frame, EyeTrackingPipelineSettings processingSettings)
         {
-            if (ui is null)
+            foreach (var eye in Eyes(EyesToCalibrate))
             {
-                ui = new CalibrationPipelineManualUI();
+                if (frame.Images[eye] is ImageEye image) LastImages[eye] = image;
             }
 
-            ui.lastImages[image.WhichEye] = image;
+            var eyeModels = EyeModels;
+            if (eyeModels is null) return (false, null);
 
-            if (ui.eyeModels is null) return (false, EyePhysicalModel.EmptyModel);
+            var calibration = new CalibrationParameters();
+            foreach (var eye in Eyes(EyesToCalibrate))
+            {
+                calibration.EyeCalibrationParameters[eye].SetEyeModel(eyeModels[eye]);
+            }
 
-            return (true, ui.eyeModels[image.WhichEye]);
+            return (true, calibration);
         }
 
-        public override (bool referenceCalibrationCompleted, ImageEye? referenceData) ProcessForReference(ImageEye image, CalibrationParameters currentCalibration, EyeTrackingPipelineSettings processingSettings)
+        /// <summary>
+        /// The references, from the first frame with every eye tracked.
+        /// </summary>
+        public override (bool completed, CalibrationParameters? calibration) ProcessForZeroReference(EyeTrackerImagesAndData frame, CalibrationParameters currentCalibration, EyeTrackingPipelineSettings processingSettings)
         {
-            ui = null; // No UI for resetting reference
+            if (!AllEyesTracked(frame)) return (false, null);
 
-            if (image == null) return (false, null);
-
-            if (image?.EyeData?.ProcessFrameResult != ProcessFrameResult.Good) return (false, null);
-
-            return (true, image);
+            return (true, WithReferences(currentCalibration, frame));
         }
     }
 

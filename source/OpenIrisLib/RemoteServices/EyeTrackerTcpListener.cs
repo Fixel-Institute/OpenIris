@@ -2,10 +2,13 @@
 namespace OpenIris
 {
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
     using System.Net;
     using System.Net.Sockets;
     using System.Threading.Tasks;
     using System.Diagnostics;
+    using System.Text;
     using System.Threading;
 
     internal class EyeTrackerTcpListener : IDisposable
@@ -27,6 +30,7 @@ namespace OpenIris
             task = Task.Run(() =>
             {
                 Thread.CurrentThread.Name = "EyeTracker:TCP server";
+                Thread.CurrentThread.IsBackground = true; // Stops the thread from preventing the application from closing
 
                 try
                 {
@@ -37,7 +41,7 @@ namespace OpenIris
                     server.Start();
 
                     // Buffer for reading data
-                    Byte[] bytes = new Byte[256];
+                    Byte[] bytes = new Byte[1024];
 
                     // Enter the listening loop.
                     while (true)
@@ -53,24 +57,36 @@ namespace OpenIris
                         NetworkStream stream = client.GetStream();
 
                         int i;
+                        var pending = string.Empty;
 
                         // Loop to receive all the data sent by the client.
                         while ((i = stream.Read(bytes, 0, bytes.Length)) != 0)
                         {
-                            // Translate data bytes to a ASCII string.
-                            
-                            var bytesToSend = eyeTracker.ParseAndExecuteStringMessage(bytes);
-                            if (bytesToSend.Length > 0)
+                            foreach (var command in SplitCommands(Encoding.ASCII.GetString(bytes, 0, i), ref pending))
                             {
-                                // Send back a response.
-                                stream.Write(bytesToSend, 0, bytesToSend.Length);
+                                var bytesToSend = eyeTracker.ParseAndExecuteStringMessage(Encoding.ASCII.GetBytes(command));
+
+                                if (bytesToSend.Length > 0)
+                                {
+                                    // Send back a response.
+                                    stream.Write(bytesToSend, 0, bytesToSend.Length);
+                                }
                             }
                         }
                     }
                 }
+                catch (SocketException e) when (e.SocketErrorCode == SocketError.Interrupted)
+                {
+                    // Stop() was called: OpenIris is closing.
+                }
+                catch (InvalidOperationException)
+                {
+                    // Stop() was called while a client was connected, so waiting for the next
+                    // connection found the server already stopped.
+                }
                 catch (SocketException e)
                 {
-                    Console.WriteLine("SocketException: {0}", e);
+                    Trace.WriteLine("ERROR: TCP server: " + e.Message);
                 }
                 finally
                 {
@@ -88,6 +104,39 @@ namespace OpenIris
             tempTask?.Dispose();
         }
 
+        /// <summary>
+        /// Splits the text received into commands. TCP doesn't keep messages apart, so commands end
+        /// with a newline: then several commands can arrive together, or one in pieces. Text without
+        /// any newline is one whole command, as older clients send it.
+        /// </summary>
+        /// <param name="received">Text received in one read.</param>
+        /// <param name="pending">The start of a command whose newline hasn't arrived yet. Pass the same
+        /// variable on every read of a connection, starting empty.</param>
+        /// <returns>The complete commands, in order.</returns>
+        internal static List<string> SplitCommands(string received, ref string pending)
+        {
+            var text = pending + received;
+            var lastNewline = text.LastIndexOf('\n');
+            if (lastNewline < 0)
+            {
+                // The rest of a command that arrived in pieces, or a command without a newline.
+                if (pending.Length > 0)
+                {
+                    pending = text;
+                    return new List<string>();
+                }
+
+                return text.Length > 0 ? new List<string> { text } : new List<string>();
+            }
+
+            pending = text.Substring(lastNewline + 1);
+            return text.Substring(0, lastNewline)
+                .Split('\n')
+                .Select(command => command.TrimEnd('\r'))
+                .Where(command => command.Length > 0)
+                .ToList();
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (!disposedValue)
@@ -97,18 +146,9 @@ namespace OpenIris
                     task.Dispose();
                 }
 
-                // TODO: free unmanaged resources (unmanaged objects) and override finalizer
-                // TODO: set large fields to null
                 disposedValue = true;
             }
         }
-
-        // // TODO: override finalizer only if 'Dispose(bool disposing)' has code to free unmanaged resources
-        // ~EyeTrackerTcpListener()
-        // {
-        //     // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-        //     Dispose(disposing: false);
-        // }
 
         public void Dispose()
         {

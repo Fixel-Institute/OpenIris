@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTracker.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -30,7 +31,7 @@ namespace OpenIris
         /// That should not be a problem. The only way to access an EyeTracker object
         /// is by the static Start method and that one will call init appropriately.
         /// </summary>
-        private EyeTracker()
+        private EyeTracker(string? profile, bool startRemoteServices)
         {
             DataBuffer = new EyeTrackerDataBuffer();
             Calibration = CalibrationParameters.Default;
@@ -39,8 +40,7 @@ namespace OpenIris
             {
                 EyeTrackerDebug.Init();
 
-                EyeTrackerLog.Create(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-                    $"OpenIrisLog-{DateTime.Now:yyyyMMMdd-HHmmss}.Log"));
+                EyeTrackerLog.Create(Path.Combine(OpenIrisFolders.Logs, $"OpenIrisLog-{DateTime.Now:yyyyMMMdd-HHmmss}.Log"));
                 try
                 {
                     // Initialize the object that loads the different eye tracking system objects. It can
@@ -56,11 +56,14 @@ namespace OpenIris
 
                 // Load settings. Needs to happen after the plugins have been initialized to properly
                 // load the settings of each plugin
-                Settings = EyeTrackerSettings.Load();
+                Settings = profile is null ? EyeTrackerSettings.Load() : EyeTrackerSettings.LoadFromFolder(Directory.GetCurrentDirectory(), profile);
+
+                // What doesn't change, at the beginning of the main log. The rest when tracking starts.
+                Trace.WriteLine(RecordingInfo.DescribeStartup(this));
 
                 // Start the server to accept remote requests For some reason I don't understand this
                 // cannot be done in a separate thread.
-                EyeTrackerRemoteServices.Start(this);
+                if (startRemoteServices) EyeTrackerRemoteServices.Start(this);
             }
             catch (Exception ex)
             {
@@ -73,11 +76,27 @@ namespace OpenIris
         /// <summary>
         /// Initializes an instance of the EyeTracker class.
         /// </summary>
-        public static EyeTracker Create()
+        /// <param name="profile">Settings profile to start with. If null, the one used last.</param>
+        /// <param name="startRemoteServices">Whether to start the remote control servers (web API,
+        /// TCP, UDP). Not for programs that run next to OpenIris, such as OpenIrisProcess: the ports
+        /// would be taken.</param>
+        public static EyeTracker Create(string? profile = null, bool startRemoteServices = true)
         {
-            eyeTracker ??= new EyeTracker();
+            eyeTracker ??= new EyeTracker(profile, startRemoteServices);
 
             return eyeTracker;
+        }
+
+        /// <summary>
+        /// Switches to another settings profile. Only while not tracking, because the eye tracking
+        /// system may change.
+        /// </summary>
+        /// <param name="name">Name of the profile.</param>
+        public void SwitchSettingsProfile(string name)
+        {
+            if (!NotStarted) throw new InvalidOperationException("Stop tracking before switching the settings profile.");
+
+            Settings.SwitchProfile(name);
         }
 
         /// <summary>
@@ -110,6 +129,13 @@ namespace OpenIris
         /// Gets the image processor. Processes the images to get data.
         /// </summary>
         public EyeTrackerProcessor? ImageProcessor { get; private set; }
+
+        /// <summary>
+        /// Gets the most frames from the cameras held at once in OpenIris' buffers: the grabber's
+        /// (shared by the cameras) and the processor's. Cameras that give images without copying them
+        /// need at least this many buffers, or they reuse the memory of images still waiting (#69).
+        /// </summary>
+        public int MaxFramesInBuffers => Settings.BufferSize + (ImageProcessor?.MaxFramesHeld ?? 0);
 
         /// <summary>
         /// Head tracker
@@ -192,6 +218,21 @@ namespace OpenIris
         public double AverageFrameProcessingTime { get; private set; }
 
         /// <summary>
+        /// Gets the name of the library (assembly) that couldn't be loaded, if that is the error.
+        /// </summary>
+        /// <param name="ex">The error.</param>
+        /// <returns>The name of the library, or null if the error is something else.</returns>
+        private static string? GetMissingLibrary(Exception ex)
+        {
+            var fileName = (ex as FileNotFoundException)?.FileName ?? (ex as FileLoadException)?.FileName;
+
+            // A missing library has an assembly name ("Name, Version=..."); a missing file has a path.
+            if (fileName is null || !fileName.Contains(", Version=")) return null;
+
+            return fileName.Substring(0, fileName.IndexOf(','));
+        }
+
+        /// <summary>
         /// Starts tracking from cameras, using the eye tracking system selected in the configuration settings.
         /// </summary>
         public async Task StartTracking()
@@ -217,11 +258,24 @@ namespace OpenIris
                 }
                 else
                 {
-                    EyeTrackingSystem = EyeTrackingSystemBase.Create(Settings.EyeTrackerSystem, Settings.EyeTrackingSystemSettings);
-                    ImageProcessor = new EyeTrackerProcessor(EyeTrackerProcessor.Mode.RealTime, EyeTrackingSystem, Settings.MaxNumberOfProcessingThreads, Settings.BufferSize);
-                    ImageGrabber = await EyeTrackerImageGrabber.CreateNewForCameras(EyeTrackingSystem, Settings.BufferSize);
-                    HeadTracker = await HeadTracker.CreateNewForRealTime(EyeTrackingSystem);
+                    try
+                    {
+                        EyeTrackingSystem = EyeTrackingSystemBase.Create(Settings.EyeTrackerSystem, Settings.EyeTrackingSystemSettings);
+                        ImageProcessor = new EyeTrackerProcessor(EyeTrackerProcessor.Mode.RealTime, EyeTrackingSystem, Settings.MaxNumberOfProcessingThreads, Settings.BufferSize);
+                        EyeTrackingSystem.MaxFramesInBuffers = MaxFramesInBuffers;
+                        ImageGrabber = await EyeTrackerImageGrabber.CreateNewForCameras(EyeTrackingSystem, Settings.BufferSize);
+                        HeadTracker = await HeadTracker.CreateNewForRealTime(EyeTrackingSystem);
+                    }
+                    catch (Exception ex) when (GetMissingLibrary(ex) is string library)
+                    {
+                        throw new OpenIrisException(
+                            $"The eye tracking system {Settings.EyeTrackerSystem} needs {library}, which isn't installed. If it comes " +
+                            "with a camera SDK (for example SpinnakerNET with the Spinnaker SDK for FLIR cameras), install the SDK and restart OpenIris.", ex);
+                    }
                 }
+
+                // How the tracking is set up, in the main log, as in each recording's log.
+                Trace.WriteLine(RecordingInfo.DescribeTracking(this));
 
                 // Action for every time new images are grabbed
                 ImageGrabber.ImagesGrabbed += (_, grabbedImages) =>
@@ -245,7 +299,7 @@ namespace OpenIris
                     {
                         EyeDataRaw = eyeDataRaw,
                         HeadDataRaw = headDataRaw,
-                        EyeDataCalibrated = Calibration?.GetCalibratedEyeData(eyeDataRaw),
+                        EyeDataCalibrated = Calibration?.GetCalibratedEyeData(eyeDataRaw, processedImages.TrackingSettings?.MmPerPix ?? double.NaN),
                         HeadDataCalibrated = Calibration?.GetCalibratedHeadData(headDataRaw),
                         FrameRate = ImageGrabber!.FrameRate
                     };
@@ -287,6 +341,11 @@ namespace OpenIris
             }
             finally
             {
+                // The images of the last frame stay, to be shown (the web client asks for them), but
+                // they may point into buffers of the cameras that the system frees when it is disposed
+                // (Spinnaker): reading them then crashed OpenIris without a trace (#32). Keep copies.
+                KeepCopiesOfTheLastImages();
+
                 EyeTrackingSystem?.Dispose();
 
                 Tracking = false;
@@ -296,6 +355,32 @@ namespace OpenIris
                 ImageProcessor = null;
                 EyeTrackingSystem = null;
                 RecordingSession = null;
+            }
+        }
+
+        /// <summary>
+        /// Replaces the images of the last frame with copies that OpenIris owns, with their data.
+        /// Once per stop, so the cameras can keep giving images without copying them.
+        /// </summary>
+        private void KeepCopiesOfTheLastImages()
+        {
+            if (!(LastImagesAndData is EyeTrackerImagesAndData last)) return;
+
+            foreach (var whichEye in new[] { Eye.Left, Eye.Right })
+            {
+                if (!(last.Images[whichEye] is ImageEye image)) continue;
+
+                try
+                {
+                    var copy = image.Copy();
+                    copy.EyeData = image.EyeData;
+                    copy.ImageTorsion = image.ImageTorsion?.Copy();
+                    last.Images[whichEye] = copy;
+                }
+                catch (Exception ex) when (ex is ObjectDisposedException || ex is InvalidOperationException)
+                {
+                    last.Images[whichEye] = null;
+                }
             }
         }
 
@@ -430,7 +515,7 @@ namespace OpenIris
                     IncreaseContrast = false,
                     AddEyelids = false,
                 });
-                using var recordingTask = RecordingSession.Start(Calibration, Settings);
+                using var recordingTask = RecordingSession.Start(Calibration, Settings, RecordingSession.Describe(this, options));
 
                 // Play video and wait until it finishes. This will also start the tracking
                 using var playingVideoTask = PlayVideo(options);
@@ -480,7 +565,7 @@ namespace OpenIris
                     DecimateRatioRawVideo = Settings.DecimateVideoRatio,
                     DataFolder = Settings.DataFolder
                 });
-                await RecordingSession.Start(Calibration, Settings);
+                await RecordingSession.Start(Calibration, Settings, RecordingSession.Describe(this));
             }
             finally
             {
@@ -494,7 +579,7 @@ namespace OpenIris
         public void StopRecording()
         {
             Trace.WriteLine("StopRecording");
-            RecordingSession?.Stop(RecordingSession.NumberFrameLastInVideo);
+            RecordingSession?.StopAtLastFrameInVideo();
         }
 
         /// <summary>
@@ -509,17 +594,21 @@ namespace OpenIris
 
             try
             {
-                using (CalibrationSession = new CalibrationSession(Settings.EyeTrackingSystemSettings.Eye, Settings.CalibrationMethod, Settings.CalibrationSettings))
+                using (CalibrationSession = new CalibrationSession(Settings.EyeTrackingSystemSettings.Eye, Settings.CalibrationMethod, Settings.CalibrationSettings, Settings.EyeTrackingSystemSettings))
                 {
 
-                    var tempCalibration = await CalibrationSession.StartCalibratingEyeModel(Settings.CalibrationSettings, Settings.TrackingPipelineSettings);
+                    var tempCalibration = await CalibrationSession.StartCalibratingModel(Settings.TrackingPipelineSettings);
                     if (tempCalibration is null) return;
 
                     // IMPORTANT!! Need to update calibration so the zero reference processing is done with a
                     // proper eye model.
                     Calibration = tempCalibration;
 
-                    Calibration = await CalibrationSession.StartCalibratingZeroReference(Calibration, Settings.CalibrationSettings, Settings.TrackingPipelineSettings);
+                    // Unless the calibration already set the references with the models.
+                    if (!CalibrationSession.HasReferences(Calibration))
+                    {
+                        Calibration = await CalibrationSession.StartCalibratingZeroReference(Calibration, Settings.TrackingPipelineSettings);
+                    }
                 }
             }
             catch
@@ -564,9 +653,9 @@ namespace OpenIris
 
             try
             {
-                using (CalibrationSession = new CalibrationSession(Settings.EyeTrackingSystemSettings.Eye, Settings.CalibrationMethod, Settings.CalibrationSettings))
+                using (CalibrationSession = new CalibrationSession(Settings.EyeTrackingSystemSettings.Eye, Settings.CalibrationMethod, Settings.CalibrationSettings, Settings.EyeTrackingSystemSettings))
                 {
-                    Calibration = await CalibrationSession.StartCalibratingZeroReference(Calibration, Settings.CalibrationSettings, Settings.TrackingPipelineSettings);
+                    Calibration = await CalibrationSession.StartCalibratingZeroReference(Calibration, Settings.TrackingPipelineSettings);
                 }
             }
             catch
@@ -626,7 +715,7 @@ namespace OpenIris
 
             if (CalibrationSession is null) return "ack";
 
-            return CalibrationSession?.HandleRemoteMessage(eventMessage) ?? "ack";
+            return CalibrationSession?.HandleMessage(eventMessage) ?? "ack";
         }
 
         /// <summary>

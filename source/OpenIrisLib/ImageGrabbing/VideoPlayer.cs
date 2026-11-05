@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="VideoPlayer.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -23,20 +24,15 @@ namespace OpenIris
         private VideoPlayerState state;
 
         private readonly EyeTrackingSystemBase eyeTrackingSystem;
+
+        /// <summary>
+        /// The eye tracking system the videos were recorded with, which prepares their images.
+        /// </summary>
+        public EyeTrackingSystemBase RecordingSystem => eyeTrackingSystem;
+
         private Timer? frameRateTimer;
         private ulong lastFrameNumber;
         private (bool isOn, ulong frameNumber) scrolling;
-
-        /// <summary>
-        /// Initializes a new instance of the VideoPlayer class.
-        /// </summary>
-        /// <param name="fileName">Names of the video files.</param>
-        public VideoPlayer(string fileName)
-            : this(new EyeTrackingSystemSingleWebCam(),
-                  new EyeCollection<string?>(fileName),
-                  new Range(),
-                  true)
-        { }
 
         /// <summary>
         /// Initializes a new instance of the VideoPlayer class for playback, not for processing.
@@ -44,7 +40,7 @@ namespace OpenIris
         /// <param name="fileNameLeft">Names of the video file for left eye.</param>
         /// <param name="fileNameRight">Names of the video file for right eye.</param>
         public VideoPlayer(string? fileNameLeft, string? fileNameRight)
-            : this(new EyeTrackingSystemDualWebCam(),
+            : this(new EyeTrackingSystemSimulation(),
                   new string?[] { fileNameLeft, fileNameRight },
                   new Range(),
                   true)
@@ -129,6 +125,13 @@ namespace OpenIris
 
             frameRateTimer?.Dispose();
             frameRateTimer = null;
+
+            // Close the video files. Otherwise they stay open until the GC finalizes them, and the
+            // videos cannot be moved or deleted while OpenIris is running.
+            Videos.ForEach(video => video?.Dispose());
+
+            // The system of the videos, which may hold its own resources.
+            eyeTrackingSystem?.Dispose();
         }
 
         /// <summary>

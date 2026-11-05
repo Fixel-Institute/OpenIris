@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CornealReflectionTrackerBlob.cs">
-//     Copyright (c) 2018 Jorge Otero-Millan, Oculomotor lab, Johns Hopkins University. All rights reserved.
+//     Copyright (c) 2018 Jorge Otero-Millan, Oculomotor lab, Johns Hopkins University.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageProcessing
@@ -10,7 +11,6 @@ namespace OpenIris.ImageProcessing
     using System.Drawing;
     using System.Linq;
     using Emgu.CV;
-    using Emgu.CV.Cvb;
     using Emgu.CV.CvEnum;
     using Emgu.CV.Structure;
 
@@ -40,8 +40,7 @@ namespace OpenIris.ImageProcessing
             //Blob_Resize,
         }
 
-        private readonly CvBlobDetector detector = new CvBlobDetector();
-        private readonly CvBlobs blobs = new CvBlobs();
+        private readonly BlobDetector detector = new BlobDetector();
 
         /// <summary>
         /// Find the corneal reflections.
@@ -57,8 +56,8 @@ namespace OpenIris.ImageProcessing
             int blurSize = (int)Math.Ceiling(trackingSettings.MinCRRadPix/2); //if not divided by 2, it only picks very small ones and by increasing the minCRRadPix it will make the cr vanish in opening and closing
             //if (blurSize == 0) { blurSize = 1; }
             var threshold = (imageEye.WhichEye == Eye.Left) ? trackingSettings.BrightThresholdLeftEye : trackingSettings.BrightThresholdRightEye;
-            var maxBlobArea = trackingSettings.MaxCRRadPix * Math.PI * Math.PI;
-            var minBlobArea = trackingSettings.MinCRRadPix * Math.PI * Math.PI;
+            var maxBlobArea = Math.PI * Math.Pow(trackingSettings.MaxCRRadPix, 2);
+            var minBlobArea = Math.PI * Math.Pow(trackingSettings.MinCRRadPix, 2);
             var irisRadiusPix =  (int) Math.Round( (imageEye.WhichEye == Eye.Left) ? trackingSettings.IrisRadiusPixLeft : trackingSettings.IrisRadiusPixRight);
 
             //for low resolution camera image the downsample will remove the corneal reflection
@@ -69,15 +68,14 @@ namespace OpenIris.ImageProcessing
 
             return trackingSettings.CornealReflectionTrackingMethod switch
             {
-                CornealReflectionTrackingMethod.Blob => FindCornealReflectionsBlob_Resize(detector, blobs, imageEye, pupilAprox, blurSize, threshold, maxBlobArea, minBlobArea, irisRadiusPix, resizeRate_findCRBlob, resizeRate_findCRCenter, openImage, closeImage),
+                CornealReflectionTrackingMethod.Blob => FindCornealReflectionsBlob_Resize(detector, imageEye, pupilAprox, blurSize, threshold, maxBlobArea, minBlobArea, irisRadiusPix, resizeRate_findCRBlob, resizeRate_findCRCenter, openImage, closeImage),
                 _ => Array.Empty<CornealReflectionData>(),
             };
         }
 
-        public static CornealReflectionData[] FindCornealReflectionsBlob_Resize(CvBlobDetector detector, CvBlobs blobs, ImageEye imageEye, PupilData pupilAprox, int blurSize, int threshold, double maxBlobArea, double minBlobArea, int irisRadiusPix, double scaleFactor_findBlob = 1.0, double scaleFactor_findCenter = 1.0, bool openImage = false, bool closeImage = false)
+        public static CornealReflectionData[] FindCornealReflectionsBlob_Resize(BlobDetector detector, ImageEye imageEye, PupilData pupilAprox, int blurSize, int threshold, double maxBlobArea, double minBlobArea, int irisRadiusPix, double scaleFactor_findBlob = 1.0, double scaleFactor_findCenter = 1.0, bool openImage = false, bool closeImage = false)
         {
             if (detector is null) throw new ArgumentNullException(nameof(detector));
-            if (blobs is null) throw new ArgumentNullException(nameof(blobs));
             if (imageEye is null) throw new ArgumentNullException(nameof(imageEye));
 
             //using iris radius for the ROI to look for CR
@@ -110,19 +108,24 @@ namespace OpenIris.ImageProcessing
 
             if (irisROI.Width == 0 || irisROI.Height == 0) return null;
 
-            var smoothBlurSize = blurSize + 1;
+            // Odd, because an even box blur shifts the image half a pixel right and down, and no
+            // wider than the smallest reflection (blurSize is half its radius, rounded up), which
+            // would otherwise blur below the threshold.
+            var smoothBlurSize = Math.Max(2 * blurSize - 1, 1);
 
             Image<Gray, byte> imgBlurred = imageEye.Image.Copy(irisROI).SmoothBlur(smoothBlurSize, smoothBlurSize);
             Image<Gray, byte> imgResized;
-            //resize the image
-            if (scaleFactor_findBlob == 1)
-            { imgResized = imgBlurred; }
-            else
-            {
-                imgResized = imgBlurred.Resize((int)Math.Round(resizeWidth), (int)Math.Round(resizeHeight), Emgu.CV.CvEnum.Inter.Cubic);
-            }
 
-            var imgCRBinary = imgResized.ThresholdBinary(new Gray(threshold), new Gray(255));
+            // Threshold, then reduce the binary image keeping every pixel with something bright in it.
+            // Reducing first lowers the peak of a small reflection below the threshold unless its
+            // center falls on a pixel.
+            var imgCRBinary = imgBlurred.ThresholdBinary(new Gray(threshold), new Gray(255));
+            if (scaleFactor_findBlob != 1)
+            {
+                imgCRBinary = imgCRBinary
+                    .Resize((int)Math.Round(resizeWidth), (int)Math.Round(resizeHeight), Emgu.CV.CvEnum.Inter.Area)
+                    .ThresholdBinary(new Gray(0), new Gray(255));
+            }
 
             //draw debug binary image
             if (EyeTracker.DEBUG)
@@ -143,7 +146,7 @@ namespace OpenIris.ImageProcessing
                 int kernelSize = (int)Math.Round(blurSize * scaleFactor_findBlob);
                 kernelSize = kernelSize == 0 ? 1 : kernelSize;
                 //var kernelSize = resizeBlur;
-                var kernel = CvInvoke.GetStructuringElement(ElementShape.Ellipse, new Size(kernelSize, kernelSize), new Point(-1, -1));
+                var kernel = CvInvoke.GetStructuringElement(MorphShapes.Ellipse, new Size(kernelSize, kernelSize), new Point(-1, -1));
                 var center = new Point(-1, -1);
                 var one = new MCvScalar(1);
                 if (openImage)
@@ -176,27 +179,37 @@ namespace OpenIris.ImageProcessing
 
             var crs = new List<CornealReflectionData>();
 
-            detector.Detect(imgCRBinary, blobs);
+            // The actual scale of the resized image (its size was rounded).
+            var findBlobScaleX = (double)imgCRBinary.Width / irisROI.Width;
+            var findBlobScaleY = (double)imgCRBinary.Height / irisROI.Height;
 
             irisRadiusPix = (int) Math.Round(irisRadiusPix * scaleFactor_findBlob);
+            var minBlobAreaOriginal = minBlobArea;
             maxBlobArea = maxBlobArea * Math.Pow(scaleFactor_findBlob, 2);
             minBlobArea = minBlobArea * Math.Pow(scaleFactor_findBlob, 2);
 
+            // A small reflection is only a few pixels in the reduced image, too few to compare with
+            // the minimum area. When the center is found in a second, enlarged image, check the
+            // minimum area there instead.
+            var checkMinAreaHere = scaleFactor_findCenter == 1;
+
             var crROI = new Rectangle();
 
-            foreach (var item in blobs)
-            {
-                CvBlob blob = item.Value;
+            // The pupil in the resized image. Not always the center of the search region: the region
+            // is clipped at the edges of the image.
+            var pupilX = (pupilAprox.Center.X - irisROI.X + 0.5) * findBlobScaleX - 0.5;
+            var pupilY = (pupilAprox.Center.Y - irisROI.Y + 0.5) * findBlobScaleY - 0.5;
 
-                var distanceToPupil = Math.Sqrt(Math.Pow(Math.Abs(blob.Centroid.X) - irisRadiusPix, 2) + Math.Pow(Math.Abs(blob.Centroid.Y) - irisRadiusPix, 2));
+            foreach (var blob in detector.Detect(imgCRBinary))
+            {
+                var distanceToPupil = Math.Sqrt(Math.Pow(blob.Centroid.X - pupilX, 2) + Math.Pow(blob.Centroid.Y - pupilY, 2));
 
                 // If area is too small
-                if (blob.Area > maxBlobArea || blob.Area < minBlobArea || distanceToPupil > irisRadiusPix)
+                if (blob.Area > maxBlobArea || (checkMinAreaHere && blob.Area < minBlobArea) || distanceToPupil > irisRadiusPix)
                 {
                     continue;
                 }
 
-                var contour = blob.GetContour();
 
                 // the score is the ration between area and squared perimeter 
                 double blobBoundingBoxArea = (double) Math.Pow(Math.Max(blob.BoundingBox.Width, blob.BoundingBox.Height) , 2);  
@@ -208,7 +221,9 @@ namespace OpenIris.ImageProcessing
                     if (score > 0.3)
                     {
                         crs.Add(new CornealReflectionData(
-                            new PointF((float) (blob.Centroid.X / scaleFactor_findBlob) + irisROI.X, (float) (blob.Centroid.Y / scaleFactor_findBlob) + irisROI.Y),
+                            new PointF(
+                                (float)ImageProcessingExtentionMethods.ResizedToOriginal(blob.Centroid.X, findBlobScaleX) + irisROI.X,
+                                (float)ImageProcessingExtentionMethods.ResizedToOriginal(blob.Centroid.Y, findBlobScaleY) + irisROI.Y),
                             new SizeF(blob.BoundingBox.Size),
                             (float)90.0));
                     }
@@ -221,19 +236,22 @@ namespace OpenIris.ImageProcessing
                         // up sample to find the center of the crs
                         resizeWidth = blob.BoundingBox.Width / scaleFactor_findBlob;
                         resizeHeight = blob.BoundingBox.Height / scaleFactor_findBlob;
-                        squareSize = Math.Max(resizeWidth, resizeHeight) * 1.2; // expand the square size to upsample the blob 
+                        var blobDiameter = Math.Max(resizeWidth, resizeHeight);
+                        squareSize = blobDiameter * 1.2; // expand the square size to upsample the blob
+                        var blobX = ImageProcessingExtentionMethods.ResizedToOriginal(blob.Centroid.X, findBlobScaleX) + irisROI.X;
+                        var blobY = ImageProcessingExtentionMethods.ResizedToOriginal(blob.Centroid.Y, findBlobScaleY) + irisROI.Y;
 
                         crROI = new Rectangle(
-                            (int)Math.Round(blob.Centroid.X / scaleFactor_findBlob + irisROI.X - squareSize),
-                            (int)Math.Round(blob.Centroid.Y / scaleFactor_findBlob + irisROI.Y - squareSize),
+                            (int)Math.Round(blobX - squareSize),
+                            (int)Math.Round(blobY - squareSize),
                             (int)Math.Round(squareSize * 2),
                             (int)Math.Round(squareSize * 2)
                         );
                         crROI.Intersect(new Rectangle(new Point(0, 0), imageEye.Size));
 
                         var crROI2 = new Rectangle(
-                            (int)Math.Round(blob.Centroid.X / scaleFactor_findBlob + irisROI.X - squareSize),
-                            (int)Math.Round(blob.Centroid.Y / scaleFactor_findBlob + irisROI.Y - squareSize),
+                            (int)Math.Round(blobX - squareSize),
+                            (int)Math.Round(blobY - squareSize),
                             (int)Math.Round(squareSize * 2 / 1.2),
                             (int)Math.Round(squareSize * 2 / 1.2)
                         );
@@ -254,7 +272,10 @@ namespace OpenIris.ImageProcessing
                         resizeWidth = (int)Math.Round(crROI.Width * scaleFactor_findCenter);
                         resizeHeight = (int)Math.Round(crROI.Height * scaleFactor_findCenter);
 
-                        imgResized = imageEye.Image.Copy(crROI).SmoothBlur(smoothBlurSize, smoothBlurSize).Resize((int)Math.Round(resizeWidth), (int)Math.Round(resizeHeight), Emgu.CV.CvEnum.Inter.Cubic);
+                        // Blur as much as this reflection allows: up to a quarter of its radius on each
+                        // side, odd so it doesn't shift the image.
+                        var blobBlurSize = 2 * (int)Math.Floor(blobDiameter / 2 / 4) + 1;
+                        imgResized = imageEye.Image.Copy(crROI).SmoothBlur(blobBlurSize, blobBlurSize).Resize((int)Math.Round(resizeWidth), (int)Math.Round(resizeHeight), Emgu.CV.CvEnum.Inter.Cubic);
                         var upSampled_imgCRBinary = imgResized.ThresholdBinary(new Gray(threshold), new Gray(255));
                         //crs.Add(new CornealReflectionData(
                         //            new PointF((int)Math.Round(blob.Centroid.X / scaleFactor_findBlob) + irisROI.X, (int)Math.Round(blob.Centroid.Y / scaleFactor_findBlob) + irisROI.Y),
@@ -271,10 +292,16 @@ namespace OpenIris.ImageProcessing
 
                         }
                         // find the center
-                        var centerMass = upSampled_imgCRBinary.GetMoments(true).GravityCenter;
+                        var moments = upSampled_imgCRBinary.GetMoments(true);
+                        if (moments.M00 == 0) continue;
+                        var centerMass = moments.GravityCenter;
 
-                        var newX = centerMass.X / scaleFactor_findCenter + crROI.X;
-                        var newY = centerMass.Y / scaleFactor_findCenter + crROI.Y;
+                        // The area without the blur, which makes small reflections look smaller.
+                        var area = imageEye.Image.Copy(crROI).ThresholdBinary(new Gray(threshold), new Gray(255)).CountNonzero()[0];
+                        if (area < minBlobAreaOriginal) continue;
+
+                        var newX = ImageProcessingExtentionMethods.ResizedToOriginal(centerMass.X, (double)imgResized.Width / crROI.Width) + crROI.X;
+                        var newY = ImageProcessingExtentionMethods.ResizedToOriginal(centerMass.Y, (double)imgResized.Height / crROI.Height) + crROI.Y;
 
                         crs.Add(new CornealReflectionData(
                         new PointF((float)newX, (float)newY),
@@ -308,9 +335,6 @@ namespace OpenIris.ImageProcessing
         /// </summary>
         public void Dispose()
         {
-            blobs?.Dispose();
-            detector?.Dispose();
-
             GC.SuppressFinalize(this);
         }
     }

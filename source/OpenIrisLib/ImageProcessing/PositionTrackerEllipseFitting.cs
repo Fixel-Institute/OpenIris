@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PositionTrackerEllipseFitting.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageProcessing
@@ -396,9 +397,10 @@ namespace OpenIris.ImageProcessing
             if (ELLIPSE_FITTING_DO_MASK && mask != null)
             {
                 var maskROIpupil = mask.Copy(roiPupil).Resize(imgPupilBinary.Width, imgPupilBinary.Height, Emgu.CV.CvEnum.Inter.Nearest);
-                int maskErodeSize = imgPupilBinary.Width / 10;
+                // Odd (rounded down), so the erosion is centered and doesn't shift the mask half a pixel.
+                int maskErodeSize = ((imgPupilBinary.Width / 10) - 1) | 1;
                 int maskErodeCenter = (int)Math.Floor(maskErodeSize / 2.0);
-                var maskErodeKernel = CvInvoke.GetStructuringElement(Emgu.CV.CvEnum.ElementShape.Ellipse, new Size(maskErodeSize, maskErodeSize), new Point(maskErodeCenter, maskErodeCenter));
+                var maskErodeKernel = CvInvoke.GetStructuringElement(Emgu.CV.CvEnum.MorphShapes.Ellipse, new Size(maskErodeSize, maskErodeSize), new Point(maskErodeCenter, maskErodeCenter));
                 CvInvoke.Erode(maskROIpupil, maskROIpupil, maskErodeKernel, new Point(maskErodeCenter, maskErodeCenter), 1, Emgu.CV.CvEnum.BorderType.Constant, new MCvScalar(0));
 
                 // Go trhough the points in the countour in reverese order to avoid problems when deleting
@@ -447,8 +449,7 @@ namespace OpenIris.ImageProcessing
 
             if (ELLIPSE_FITTING_DO_HEURISTIC_INTERPOLATION)
             {
-                // TODO: If the current position is too far from the reference position don't do this
-                // unless there is a geometric correction
+                // This can distort the pupil, especially far from the reference position (see #77).
 
                 var boundingBox = pupilCountour.GetCountourBoundingBox();
 
@@ -590,9 +591,10 @@ namespace OpenIris.ImageProcessing
             ////////////////////////////////////////////////////////////////////////////////////////////////////////
             // -- Thresholding -- Get the binary image with the dark pixels
             ////////////////////////////////////////////////////////////////////////////////////////////////////////
-            int blurSize = (int)Math.Max(Math.Round(2 * scaleFactor),1);
+            // Odd blur sizes, because an even box blur shifts the image half a pixel right and down.
+            int blurSize = 2 * (int)Math.Round(scaleFactor) + 1;
             var imgTemp = imageEye.Image.Copy(roiPupil).Resize(resizeWidth, resizeHeight, Emgu.CV.CvEnum.Inter.Cubic).SmoothBlur(blurSize, blurSize);
-            var imgPupilBinary = imgTemp.SmoothBlur(10, 10).ThresholdBinaryInv(new Gray(threshold), new Gray(255));
+            var imgPupilBinary = imgTemp.SmoothBlur(11, 11).ThresholdBinaryInv(new Gray(threshold), new Gray(255));
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////
             // -- Image Closing and opening -- Remove little dots over threshold or little gaps under
@@ -602,7 +604,7 @@ namespace OpenIris.ImageProcessing
             {
                 int size = 2 * (int)Math.Round(2 * (desiredMaxSize / 50.0)) + 1;
                 int center = (int)Math.Floor(size / 2.0);
-                var kernel = CvInvoke.GetStructuringElement(Emgu.CV.CvEnum.ElementShape.Ellipse, new Size(size, size), new Point(center, center));
+                var kernel = CvInvoke.GetStructuringElement(Emgu.CV.CvEnum.MorphShapes.Ellipse, new Size(size, size), new Point(center, center));
                 CvInvoke.Erode(imgPupilBinary, imgPupilBinary, kernel, new Point(center, center), 1, Emgu.CV.CvEnum.BorderType.Constant, new MCvScalar(0));
                 CvInvoke.Dilate(imgPupilBinary, imgPupilBinary, kernel, new Point(center, center), 1, Emgu.CV.CvEnum.BorderType.Constant, new MCvScalar(0));
             }
@@ -611,7 +613,7 @@ namespace OpenIris.ImageProcessing
             {
                 int size = 2 * (int)Math.Round(2 * (desiredMaxSize / 50.0)) + 1;
                 int center = (int)Math.Floor(size / 2.0);
-                var kernel = CvInvoke.GetStructuringElement(Emgu.CV.CvEnum.ElementShape.Ellipse, new Size(size, size), new Point(center, center));
+                var kernel = CvInvoke.GetStructuringElement(Emgu.CV.CvEnum.MorphShapes.Ellipse, new Size(size, size), new Point(center, center));
                 CvInvoke.Dilate(imgPupilBinary, imgPupilBinary, kernel, new Point(center, center), 1, Emgu.CV.CvEnum.BorderType.Constant, new MCvScalar(0));
                 CvInvoke.Erode(imgPupilBinary, imgPupilBinary, kernel, new Point(center, center), 1, Emgu.CV.CvEnum.BorderType.Constant, new MCvScalar(0));
             }
@@ -684,7 +686,9 @@ namespace OpenIris.ImageProcessing
             float scaleFactorY = imgPupilBinary.Height / (float)roiPupil.Height;
 
             var pupil = new PupilData(
-                new PointF((pupilEllipse.Center.X / scaleFactorX) + (float)roiPupil.X, (pupilEllipse.Center.Y / scaleFactorY) + (float)roiPupil.Y),
+                new PointF(
+                    (float)ImageProcessingExtentionMethods.ResizedToOriginal(pupilEllipse.Center.X, scaleFactorX) + roiPupil.X,
+                    (float)ImageProcessingExtentionMethods.ResizedToOriginal(pupilEllipse.Center.Y, scaleFactorY) + roiPupil.Y),
                 new SizeF(pupilEllipse.Size.Width / scaleFactorX, pupilEllipse.Size.Height / scaleFactorY),
                 pupilEllipse.Angle - 90);
             return pupil;

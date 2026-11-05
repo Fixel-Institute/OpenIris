@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackerProcessor.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -75,6 +76,11 @@ namespace OpenIris
 
             numberOfThreads = Math.Min(maxNumberOfThreads, Math.Max(1, (int)Math.Round(Environment.ProcessorCount / 2.0 - 1)));
         }
+
+        /// <summary>
+        /// Gets the most frames held at once: the input buffer, plus one being processed by each thread.
+        /// </summary>
+        internal int MaxFramesHeld => inputBufferSize + numberOfThreads;
 
         /// <summary>
         /// Notifies listeners that a frame has been processed and new data is available.
@@ -370,6 +376,11 @@ namespace OpenIris
 
                     EyeTrackerDebug.TrackTimeBeginPipeline(whichEye, image.TimeStamp);
                     (image.EyeData, image.ImageTorsion) = pipeline.Process(image, imagesAndData!.Calibration.EyeCalibrationParameters[whichEye]);
+                    if (image.EyeData is not null)
+                    {
+                        image.EyeData.Roi = image.Roi;
+                        image.EyeData.Intrinsics = image.Intrinsics;
+                    }
                     EyeTrackerDebug.TrackTimeEndPipeline();
                 }
                 catch

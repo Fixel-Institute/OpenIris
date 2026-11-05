@@ -1,0 +1,186 @@
+﻿using System.Threading.Tasks;
+using OpenIris;
+using OpenIris.ImageGrabbing;
+using System.ComponentModel.Composition;
+using SpinnakerNET;
+using System.Drawing;
+using System;
+using System.Collections.Generic;
+using Spinnaker;
+using System.Diagnostics;
+using static System.Net.Mime.MediaTypeNames;
+using System.Threading;
+using System.ComponentModel;
+using SpinnakerNET.GenApi;
+using System.Runtime.CompilerServices;
+using System.Numerics;
+
+namespace SpinnakerInterface
+{
+#nullable enable
+
+    [Export(typeof(EyeTrackingSystemBase)), PluginDescriptionEyeTrackingSystem("Spinnaker Dual Camera", typeof(EyeTrackingSystemSettingsSpinnaker_DualCam))]
+
+    class EyeTrackingSystemSpinnaker_DualCam : EyeTrackingSystemBase
+    {
+        protected CameraEyeSpinnaker? leftEyeCamera = null;
+        protected CameraEyeSpinnaker? rightEyeCamera = null;
+
+        protected override EyeCollection<CameraEye?>? CreateAndStartCameras()
+        {
+            var settings = Settings as EyeTrackingSystemSettingsSpinnaker_DualCam ?? throw new ArgumentNullException("Settings are null and shouldn't");
+            try
+            {
+                var cameraList = CameraEyeSpinnaker.FindCameras(2, settings.Eye, settings.LeftEyeCameraSerialNumber, settings.RightEyeCameraSerialNumber);
+
+                leftEyeCamera = new CameraEyeSpinnaker(
+                    whichEye: Eye.Left,
+                    camera: cameraList[0],
+                    frameRate: (double)settings.FrameRate,
+                    gain: (int)settings.Gain,
+                    roi: new Rectangle { X=settings.LeftOffset.X, Y=settings.LeftOffset.Y, Width = settings.FrameWidth, Height = settings.FrameHeight },
+                    framesInBuffers: MaxFramesInBuffers,
+                    orientation: settings.LeftEyeOrientation
+                );
+
+                rightEyeCamera = new CameraEyeSpinnaker(
+                    whichEye: Eye.Right,
+                    camera: cameraList[1],
+                    frameRate: (double)settings.FrameRate,
+                    gain: (int)settings.Gain,
+                    roi: new Rectangle { X = settings.RightOffset.X, Y = settings.RightOffset.Y, Width = settings.FrameWidth, Height = settings.FrameHeight },
+                    framesInBuffers: MaxFramesInBuffers,
+                    orientation: settings.RightEyeOrientation
+                );
+
+                settings.LeftEyeCameraSerialNumber = cameraList[0].DeviceSerialNumber.ToString();
+                settings.RightEyeCameraSerialNumber = cameraList[1].DeviceSerialNumber.ToString();
+
+                //start cameras
+                CameraEyeSpinnaker.BeginSynchronizedAcquisition(leftEyeCamera, rightEyeCamera);
+                
+                return new EyeCollection<CameraEye?>(leftEyeCamera, rightEyeCamera);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Error starting cameras captures or setting GPIOs. " + ex.Message, ex);
+            }  
+        }
+
+        public override void Dispose()
+        {
+            leftEyeCamera?.Stop();
+            leftEyeCamera?.Dispose();
+
+            rightEyeCamera?.Stop();
+            rightEyeCamera?.Dispose();
+        }
+        
+        public override EyeTrackerImagesAndData PostProcessImagesAndData(EyeTrackerImagesAndData processedImages)
+        {
+            ExtraData extraData = new ExtraData();
+            var imSourceData = processedImages.Images[Eye.Left]?.ImageSourceData;
+            if (imSourceData != null)
+            {
+                var (exposureEndLineStatusAll, _) = (ValueTuple<long, IManagedImage>)imSourceData;
+                extraData.Int0 = Convert.ToInt32(exposureEndLineStatusAll);
+                processedImages.Data.ExtraData = extraData;
+            }
+            imSourceData = processedImages.Images[Eye.Right]?.ImageSourceData;
+            if (imSourceData != null)
+            {
+                var (exposureEndLineStatusAll, _) = (ValueTuple<long, IManagedImage>)imSourceData;
+                extraData.Int1 = Convert.ToInt32(exposureEndLineStatusAll);
+                processedImages.Data.ExtraData = extraData;
+            }
+            return processedImages;
+        }
+
+        protected override void SaveCameraExposure()
+        {
+            // Figure out current exposure from the cameras
+            var leftGain = leftEyeCamera?.Gain ?? 1;
+            var rightGain = rightEyeCamera?.Gain ?? 1;
+            
+            //check if they are the same and throw error if not
+            if (leftGain != rightGain)
+            {
+                throw new Exception("The left and right camera gain aren't equal.");
+            }
+            
+            var mySettings = Settings as EyeTrackingSystemSettingsSpinnaker_DualCam;
+            mySettings.Gain = leftGain; 
+        }
+
+        protected override void SaveCameraMove()
+        {
+            var leftOffset = leftEyeCamera?.Offset?? new Point((int)leftEyeCamera.MaxROI_Offset.X/2, (int)leftEyeCamera.MaxROI_Offset.Y/2);
+            var rightOffset = rightEyeCamera?.Offset ?? new Point((int)rightEyeCamera.MaxROI_Offset.X/2, (int)rightEyeCamera.MaxROI_Offset.Y/2);
+
+            var mySettings = Settings as EyeTrackingSystemSettingsSpinnaker_DualCam;
+            mySettings.LeftOffset = leftOffset;
+            mySettings.RightOffset = rightOffset;
+        }
+    }
+
+
+    public class EyeTrackingSystemSettingsSpinnaker_DualCam : EyeTrackingSystemSettings
+    {
+        public EyeTrackingSystemSettingsSpinnaker_DualCam()
+        {
+            PixPerMm = 7;
+            Eye = Eye.Both;
+
+            // One light, where it is still to be measured.
+            Lights = new[] { new LightPosition() };
+        }
+
+        // Not [NeedsRestarting]: the system itself sets these while starting the cameras, and that
+        // would stop the tracking that is just starting.
+        [Category("Camera properties"), Description("LeftEye - CameraSerialNumber")]
+        public string LeftEyeCameraSerialNumber { get => this.leftEyeCameraSerialNumber; set => SetProperty(ref leftEyeCameraSerialNumber, value, nameof(LeftEyeCameraSerialNumber)); }
+        private string leftEyeCameraSerialNumber = null;
+
+        [Category("Camera properties"), Description("RightEye - CameraSerialNumber")]
+        public string RightEyeCameraSerialNumber { get => this.rightEyeCameraSerialNumber; set => SetProperty(ref rightEyeCameraSerialNumber, value, nameof(RightEyeCameraSerialNumber)); }
+        private string rightEyeCameraSerialNumber = null;
+
+        [Category("Camera properties"), Description("LeftEye Orientation")]
+        public CameraOrientation LeftEyeOrientation { get => leftEyeOrientation; set => SetProperty(ref leftEyeOrientation, value, nameof(LeftEyeOrientation)); }
+        private CameraOrientation leftEyeOrientation = CameraOrientation.Upright;
+
+        [Category("Camera properties"), Description("RightEye Orientation")]
+        public CameraOrientation RightEyeOrientation { get => rightEyeOrientation; set => SetProperty(ref rightEyeOrientation, value, nameof(RightEyeOrientation)); }
+        private CameraOrientation rightEyeOrientation = CameraOrientation.Upright;
+
+        // The part of the sensor that is read. A smaller image, in particular a shorter one, allows
+        // a higher frame rate; the limits are in the user manual (configuration.md).
+        [NeedsRestarting]
+        [Category("Camera properties"), Description("Width of the images in pixels: the part of the sensor that is read. The camera sets the limits (for example a multiple of 4, at most 720, for the Blackfly S BFS-U3-04S2M).")]
+        public int FrameWidth { get => frameWidth; set => SetProperty(ref frameWidth, value, nameof(FrameWidth)); }
+        private int frameWidth = 720;
+
+        [NeedsRestarting]
+        [Category("Camera properties"), Description("Height of the images in pixels: the part of the sensor that is read. The camera sets the limits (for example a multiple of 2, at most 540, for the Blackfly S BFS-U3-04S2M). Shorter images allow higher frame rates.")]
+        public int FrameHeight { get => frameHeight; set => SetProperty(ref frameHeight, value, nameof(FrameHeight)); }
+        private int frameHeight = 450;
+
+        //[NeedsRestarting]
+        [ReadOnly(true)]
+        [Category("Camera properties"), Description("Gain")]
+        public double Gain { get => gain; set => SetProperty(ref gain, value, nameof(Gain)); }
+        private double gain = 9;
+
+        //[NeedsRestarting]
+        [ReadOnly(true)]
+        [Category("Camera properties"), Description("Left Offset")]
+        public Point LeftOffset { get => this.leftOffset; set => SetProperty(ref leftOffset, value, nameof(LeftOffset)); }
+        private Point leftOffset = new Point(0, 0);
+
+        //[NeedsRestarting]
+        [ReadOnly(true)]
+        [Category("Camera properties"), Description("Right Offset")]
+        public Point RightOffset { get => this.rightOffset; set => SetProperty(ref rightOffset, value, nameof(RightOffset)); }
+        private Point rightOffset = new Point(0, 0);
+    }
+}

@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ImageEyeProcess.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -14,10 +15,7 @@ namespace OpenIris
     using System.ComponentModel;
     using System.ComponentModel.Composition;
     using OpenIris.ImageProcessing;
-    using System.Windows.Forms;
     using System.Collections.Generic;
-    using Emgu.CV.UI;
-    using OpenIris.UI;
 
     /// <summary>
     /// Class in charge of processing images and tracking the pupil and iris to obtain the eye
@@ -73,8 +71,8 @@ namespace OpenIris
 
             // Copy the calibration variables just in case they change during the processing to avoid
             // inconsistencies The next frame will use the updated calibration
-            var eyeModel = eyeCalibrationParameters.EyePhysicalModel;
-            var referencePupil = eyeCalibrationParameters.ReferenceData.Pupil;
+            var eyeModel = eyeCalibrationParameters.EyeModelFor(imageEye.Intrinsics);
+            var referencePupil = eyeCalibrationParameters.ReferencePupilFor(imageEye.Intrinsics);
             var referenceTorsionImage = eyeCalibrationParameters.ImageTorsionReference;
             var eyeROI = imageEye.WhichEye == Eye.Left ? settings.CroppingLeftEye : settings.CroppingRightEye;
             var irisRadius = (imageEye.WhichEye == Eye.Left) ? settings.IrisRadiusPixLeft : settings.IrisRadiusPixRight;
@@ -301,6 +299,13 @@ namespace OpenIris
         [Category("Torsion settings"), Description("Maximum torsion in one direction (degrees).")]
         public double MaxTorsion { get => maxTorsion; set => SetProperty(ref maxTorsion, value, nameof(MaxTorsion)); }
         private double maxTorsion = 25;
+
+        /// <summary>
+        /// Gets or sets the seed of the noise that fills the masked parts of the iris.
+        /// </summary>
+        [Category("Torsion settings"), Description("Seed of the random noise that fills the masked parts of the iris (eyelids, reflections). 0: different every time. Any other value: processing the same video again gives exactly the same torsion.")]
+        public int TorsionNoiseSeed { get => torsionNoiseSeed; set => SetProperty(ref torsionNoiseSeed, value, nameof(TorsionNoiseSeed)); }
+        private int torsionNoiseSeed = 0;
 
         #endregion Torsion tracking settings
     }

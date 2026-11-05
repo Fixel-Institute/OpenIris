@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>OpenIris.UI</RootNamespace>
+    <AssemblyName>OpenIris</AssemblyName>
+    <ApplicationIcon>OpenIris.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Windows.Forms.DataVisualization" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Emgu.CV" />
+    <!-- The native OpenCV, copied to lib\. -->
+    <PackageReference Include="Emgu.CV.runtime.windows" />
+    <PackageReference Include="Emgu.CV.Bitmap" />
+    <PackageReference Include="Emgu.CV.UI" />
+    <!-- OpenIrisLib's web server. Referenced here too so the binding redirects it needs
+         (System.ValueTuple, for Swan.Lite) go into OpenIris.exe.config. -->
+    <PackageReference Include="EmbedIO" />
+    <PackageReference Include="GitVersion.MsBuild" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Sample videos: the eyes, played by the Simulation system, and the whole face, for the Webcam system. -->
+    <None Include="..\..\sample-videos\*.mp4;..\..\sample-videos\*.MOV" Link="SampleVideos\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Update="EyeTrackerAboutBox.cs" SubType="Form" />
+    <Compile Update="EyeTrackerGui.cs" SubType="Form" />
+    <Compile Update="Properties\Resources.Designer.cs" AutoGen="True" DesignTime="True" DependentUpon="Resources.resx" />
+    <EmbeddedResource Update="Properties\Resources.resx" Generator="ResXFileCodeGenerator" LastGenOutput="Resources.Designer.cs" />
+  </ItemGroup>
+  <!-- The full quality sample videos, if both are in sample-videos (gitignored). Simulation plays them instead of the MP4s. -->
+  <ItemGroup Condition="Exists('..\..\sample-videos\JorgeLeft.avi') And Exists('..\..\sample-videos\JorgeRight.avi')">
+    <Content Include="..\..\sample-videos\JorgeLeft.avi" Link="SampleVideos\JorgeLeft.avi" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\sample-videos\JorgeRight.avi" Link="SampleVideos\JorgeRight.avi" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Everything the program uses goes in lib\ (shared with OpenIrisProcess.exe). -->
+  <Import Project="..\OpenIrisProgram.targets" />
+  <ItemGroup>
+    <ProjectReference Include="..\OpenIrisLib\OpenIrisLib.csproj" />
+    <ProjectReference Include="..\OpenIrisWinForms\OpenIrisWinForms.csproj" />
+  </ItemGroup>
+</Project>

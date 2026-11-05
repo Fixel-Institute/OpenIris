@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeData.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------                            
 namespace OpenIris
@@ -33,6 +34,19 @@ namespace OpenIris
         public double MagnetometerX { get; set; }
         public double MagnetometerY { get; set; }
         public double MagnetometerZ { get; set; }
+
+        /// <summary>
+        /// For systems that measure the head from images of the face (Webcam): the orientation of the
+        /// head relative to facing the camera, a 3×3 rotation matrix by rows, in the axes of the face
+        /// (X to the subject's left, Y up, Z out of the face). Null without it. See FacePose.
+        /// </summary>
+        public double[]? FaceRotation { get; set; }
+
+        /// <summary>
+        /// For systems that measure the head from images of the face: the position of the head (the
+        /// nose tip) from the camera, in mm: to the subject's right, up, and the distance. Null without it.
+        /// </summary>
+        public double[]? FacePosition { get; set; }
 
         public bool IsEmpty
         {

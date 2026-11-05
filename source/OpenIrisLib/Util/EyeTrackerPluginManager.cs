@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackingPluginLoader.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -30,14 +31,21 @@ namespace OpenIris
         {
             try
             {
-                var pluginFolder = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Plugins");
+                if (!resolvingFromPath)
+                {
+                    AppDomain.CurrentDomain.AssemblyResolve += LoadFromPath;
+                    resolvingFromPath = true;
+                }
+
+                var pluginFolder = OpenIrisFolders.Plugins;
 
                 // An aggregate catalog that combines multiple catalogs
                 // Adds all the parts found in all assemblies in the same directory as the executing program
                 // and in the plugin directory
-                using var catalog = new AggregateCatalog();
-                using var assemblyCatalog = new AssemblyCatalog(Assembly.GetExecutingAssembly());
-                using var pluginCatalog = new DirectoryCatalog(pluginFolder);
+                // Kept for GetExports, for the life of the program.
+                var catalog = new AggregateCatalog();
+                var assemblyCatalog = new AssemblyCatalog(Assembly.GetExecutingAssembly());
+                var pluginCatalog = new DirectoryCatalog(pluginFolder);
 
                 catalog.Catalogs.Add(assemblyCatalog);
                 if (!safeMode)
@@ -48,15 +56,98 @@ namespace OpenIris
                 EyeTrackingsyStemFactory = new EyeTrackerPluginLoader<EyeTrackingSystemBase, IEyeTrackingSystemMetadata>(catalog);
                 CalibrationPipelineFactory = new EyeTrackerPluginLoader<CalibrationPipelineBase, IEyeTrackerPluginMetadata>(catalog);
                 EyeTrackingPipelineFactory = new EyeTrackerPluginLoader<EyeTrackingPipelineBase, IEyeTrackerPluginMetadata>(catalog);
+                container = new CompositionContainer(catalog);
 
                 ExtraSettingsTypesForXML = new List<Type>();
                 ExtraSettingsTypesForXML.AddRange(EyeTrackingsyStemFactory.ClassesAvaiable.Select(t => t.SettingsType));
                 ExtraSettingsTypesForXML.AddRange(EyeTrackingPipelineFactory.ClassesAvaiable.Select(t => t.SettingsType));
                 ExtraSettingsTypesForXML.AddRange(CalibrationPipelineFactory.ClassesAvaiable.Select(t => t.SettingsType));
+
+                // The kinds of calibration data (EyeCalibrationData, CalibrationModelParameters), for
+                // the calibration files: those defined in the assemblies of the calibration plugins.
+                ExtraSettingsTypesForXML.AddRange(CalibrationPipelineFactory.ClassesAvaiable
+                    .Select(t => t.SettingsType.Assembly).Distinct()
+                    .SelectMany(TypesIn)
+                    .Where(t => (typeof(EyeCalibrationData).IsAssignableFrom(t) || typeof(CalibrationModelParameters).IsAssignableFrom(t)) && !t.IsAbstract));
             }
             catch (Exception ex)
             {
                 throw new PluginManagerException("ERROR loading plugins", ex);
+            }
+        }
+
+        private static CompositionContainer? container;
+
+        /// <summary>
+        /// Gets every part exported as type T by OpenIris and the plugins. User interfaces use it to
+        /// find what plugins provide for them, such as the windows of eye tracking systems, without
+        /// the core knowing about any user interface library.
+        /// </summary>
+        /// <typeparam name="T">Type the parts are exported as.</typeparam>
+        public static IEnumerable<T> GetExports<T>()
+        {
+            try
+            {
+                return container?.GetExportedValues<T>() ?? Enumerable.Empty<T>();
+            }
+            catch (Exception ex) when (ex is CompositionException || ex is ReflectionTypeLoadException)
+            {
+                Trace.WriteLine($"ERROR loading the plugin parts of type {typeof(T).Name}: {ex.Message}");
+                return Enumerable.Empty<T>();
+            }
+        }
+
+        /// <summary>
+        /// The types of an assembly that can be loaded (a plugin may reference a library that isn't installed).
+        /// </summary>
+        private static IEnumerable<Type> TypesIn(Assembly assembly)
+        {
+            try
+            {
+                return assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                return ex.Types.Where(t => t != null);
+            }
+        }
+
+        private static bool resolvingFromPath;
+        private static readonly HashSet<string> notInPath = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Loads an assembly that isn't next to OpenIris or its plugins from the folders in PATH.
+        /// Camera SDKs such as Spinnaker install their .NET library in a folder they add to PATH,
+        /// next to the native libraries it needs, and the two must be the same version. So plugins
+        /// don't ship it: it is loaded from there, whatever version of the SDK is installed.
+        /// </summary>
+        private static Assembly? LoadFromPath(object sender, ResolveEventArgs args)
+        {
+            var fileName = new AssemblyName(args.Name).Name + ".dll";
+
+            lock (notInPath)
+            {
+                if (notInPath.Contains(fileName)) return null;
+
+                foreach (var folder in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+                {
+                    try
+                    {
+                        var file = Path.Combine(folder.Trim().Trim('"'), fileName);
+                        if (!File.Exists(file)) continue;
+
+                        var assembly = Assembly.LoadFrom(file);
+                        Trace.WriteLine($"Loaded {assembly.FullName} from {file}");
+                        return assembly;
+                    }
+                    catch (ArgumentException)
+                    {
+                        // A PATH entry with invalid characters.
+                    }
+                }
+
+                notInPath.Add(fileName);
+                return null;
             }
         }
 
@@ -144,6 +235,12 @@ namespace OpenIris
         /// Gets a list of camera systems available.
         /// </summary>
         public IEnumerable<TPluginMetadata> ClassesAvaiable { get { return ClassFactories.Select(x => x.Metadata); } }
+
+        /// <summary>
+        /// Whether a plugin with this name is installed.
+        /// </summary>
+        /// <param name="name">Name of the plugin.</param>
+        public bool IsAvailable(string name) => ClassFactories?.Any(x => x.Metadata.Name == name) ?? false;
 
         /// <summary>
         /// Generic factory method.

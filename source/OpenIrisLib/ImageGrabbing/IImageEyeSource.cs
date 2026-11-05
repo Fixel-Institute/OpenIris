@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="IImageEyeSource.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageGrabbing
@@ -114,6 +115,10 @@ namespace OpenIris.ImageGrabbing
 
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
+    /// <summary>
+    /// How the image of a camera has to be turned to show the eye upright: rotated clockwise by
+    /// the angle, then mirrored horizontally (see ImageEye.CorrectOrientation).
+    /// </summary>
     public enum CameraOrientation
     {
         Upright,

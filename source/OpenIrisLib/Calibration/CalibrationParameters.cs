@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CalibrationParameters.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -35,7 +36,23 @@ namespace OpenIris
         /// <summary>
         /// Calibration parameters for Eye data.
         /// </summary>
+        [XmlIgnore]
         public EyeCollection<EyeCalibration> EyeCalibrationParameters { get; set; }
+
+        /// <summary>
+        /// The eye calibrations as saved in the file (same XML as EyeCalibrationParameters). An array,
+        /// because when reading the file .NET adds the eyes to an existing collection (the two the
+        /// constructor creates) but replaces an array.
+        /// </summary>
+        [XmlArray(nameof(EyeCalibrationParameters))]
+        [XmlArrayItem(nameof(EyeCalibration))]
+        [System.ComponentModel.Browsable(false)]
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public EyeCalibration[] EyeCalibrationParametersForXml
+        {
+            get => System.Linq.Enumerable.ToArray(EyeCalibrationParameters);
+            set => EyeCalibrationParameters = new EyeCollection<EyeCalibration>(value);
+        }
 
         /// <summary>
         /// Gets calibration info for the head.
@@ -49,9 +66,11 @@ namespace OpenIris
         public EyeTrackingPipelineSettings? TrackingSettings { get; set; }
 
         /// <summary>
-        /// Additional parameters that can be specific for each calibration method. Make sure this is serializable.
+        /// The calibration's own parameters for the whole calibration (not one eye), of the kind the
+        /// calibration method defines; null if it has none. The parameters of each eye are in
+        /// <see cref="EyeCalibration.CalibrationData"/>.
         /// </summary>
-        public object? AdditionalParameters { get; set; }
+        public CalibrationModelParameters? CalibrationModelParameters { get; set; }
 
         /// <summary>
         /// Loads the parameters from a file.
@@ -65,13 +84,7 @@ namespace OpenIris
                 var reader = new XmlSerializer(typeof(CalibrationParameters), EyeTrackerPluginManager.ExtraSettingsTypesForXML?.ToArray());
                 using var file = new StreamReader(fileName);
                 using var xmlreader = XmlReader.Create(file);
-                var calibration = (CalibrationParameters)reader.Deserialize(xmlreader);
-                if (calibration.EyeCalibrationParameters.Count == 4)
-                {
-                    // TODO: HORRIBLE QUICK FIX. Needs to be done because the current initalization while serializing creates two empty items. Then, when deserializing it adds two more.
-                    calibration.EyeCalibrationParameters = new EyeCollection<EyeCalibration>(calibration.EyeCalibrationParameters[2], calibration.EyeCalibrationParameters[3]);
-                }
-                return calibration;
+                return (CalibrationParameters)reader.Deserialize(xmlreader);
             }
             catch (IOException ex)
             {
@@ -134,17 +147,21 @@ namespace OpenIris
                 EyeCalibrationParameters = new EyeCollection<EyeCalibration>(
                     EyeCalibrationParameters[Eye.Left].Copy(),
                     EyeCalibrationParameters[Eye.Right].Copy()),
-                HeadCalibrationParameters = HeadCalibrationParameters,
+                HeadCalibrationParameters = HeadCalibrationParameters?.Copy(),
                 TrackingSettings = TrackingSettings,
+                CalibrationModelParameters = CalibrationModelParameters,
             };
         }
 
         /// <summary>
-        /// Gets the calibrated data from the raw data.
+        /// Gets the calibrated data from the raw data. The angles are the Fick angles of the rotation of
+        /// the eye from the reference (EyeRotationMath): Listing's law with Listing's plane perpendicular
+        /// to the line of sight at the reference, plus the torsion when it is known.
         /// </summary>
         /// <param name="eyeData">Raw data.</param>
+        /// <param name="mmPerPix">Size of a pixel at the eye, in mm, for the pupil area. NaN if unknown.</param>
         /// <returns>Calibrated data.</returns>
-        public CalibratedEyeData GetCalibratedEyeData(EyeData? eyeData)
+        public CalibratedEyeData GetCalibratedEyeData(EyeData? eyeData, double mmPerPix = double.NaN)
         {
             var data = new CalibratedEyeData
             {
@@ -159,6 +176,11 @@ namespace OpenIris
 
             if (eyeData.ProcessFrameResult == ProcessFrameResult.Good)
             {
+                // In the pixels of the calibration's images, if the window of the camera moved since
+                // (#61). A copy only then.
+                var shift = calibrationInfo.ShiftTo(eyeData.Intrinsics);
+                if (!shift.IsEmpty) eyeData = eyeData.Translated(new System.Drawing.SizeF(-shift.Width, -shift.Height));
+
                 var eyeModel = EyeCalibrationParameters[eyeData.WhichEye].EyePhysicalModel;
                 if (!calibrationInfo.HasEyeModel)
                 {
@@ -173,32 +195,20 @@ namespace OpenIris
                     referenceY = EyeCalibrationParameters[eyeData.WhichEye].ImageSize.Height / 2;
                 }
 
-                // Get the angle position relative to the reference
-                var referenceXDeg = Math.Asin((referenceX - eyeModel.Center.X) / eyeModel.Radius) * 180 / Math.PI;
-                var referenceYDeg = Math.Asin((referenceY - eyeModel.Center.Y) / eyeModel.Radius) * 180 / Math.PI;
+                // The rotation of the eye from the reference, and its Fick angles. Torsion is NaN
+                // when it isn't measured (the rotation then follows Listing's law).
+                var rotation = EyeRotationMath.FromLinesOfSight(
+                    EyeRotationMath.LineOfSight(new System.Drawing.PointF(referenceX, referenceY), eyeModel, eyeData.WhichEye),
+                    EyeRotationMath.LineOfSight(eyeData.Pupil.Center, eyeModel, eyeData.WhichEye),
+                    eyeData.TorsionAngle,
+                    calibrationInfo.Extrinsics.IsEmpty ? null : calibrationInfo.Extrinsics.HeadUp);
+                var (horizontal, vertical, torsion) = EyeRotationMath.FickAngles(rotation);
+                data.HorizontalPosition = horizontal;
+                data.VerticalPosition = vertical;
+                data.TorsionalPosition = double.IsNaN(eyeData.TorsionAngle) ? double.NaN : torsion;
 
-                var xDeg = Math.Asin((eyeData.Pupil.Center.X - eyeModel.Center.X) / eyeModel.Radius) * 180 / Math.PI;
-                var yDeg = Math.Asin((eyeData.Pupil.Center.Y - eyeModel.Center.Y) / eyeModel.Radius) * 180 / Math.PI;
-
-                data.HorizontalPosition = -(xDeg - referenceXDeg);
-                data.VerticalPosition = -(yDeg - referenceYDeg);
-
-                data.TorsionalPosition = eyeData.TorsionAngle;
-
-                if (double.IsNaN(eyeData.TorsionAngle))
-                {
-                    data.TorsionalPosition = double.NaN;
-                }
-
-                // Pupil area in mm2 asuming 24 mm eyeblobe
-                if (!calibrationInfo.EyePhysicalModel.IsEmpty)
-                {
-                    data.PupilArea = (eyeData.Pupil.Size.Width / calibrationInfo.EyePhysicalModel.Radius * 12) * (eyeData.Pupil.Size.Height / calibrationInfo.EyePhysicalModel.Radius * 12) * Math.PI;
-                }
-                else
-                {
-                    data.PupilArea = (eyeData.Pupil.Size.Width / eyeData.Iris.Radius * 12) * (eyeData.Pupil.Size.Height / eyeData.Iris.Radius * 12) * Math.PI;
-                }
+                // Width and height are the full axes of the ellipse, so its area is π·w·h/4.
+                data.PupilArea = Math.PI / 4 * eyeData.Pupil.Size.Width * eyeData.Pupil.Size.Height * mmPerPix * mmPerPix;
 
                 if (calibrationInfo.HasReference)
                 {
@@ -227,6 +237,13 @@ namespace OpenIris
                 {
                     data.DataQuality = double.NaN;
                 }
+
+                // What the calibration found beyond the eye model (for example the map of Remote
+                // Linear) changes the data as that calibration needs.
+                if (calibrationInfo.CalibrationData is EyeCalibrationData calibrationData)
+                {
+                    data = calibrationData.Adjust(eyeData, data);
+                }
             }
 
             return data;
@@ -236,14 +253,15 @@ namespace OpenIris
         /// Gets the calibrated eye data for both eyes.
         /// </summary>
         /// <param name="eyeDataRaw">Eye data raw.</param>
+        /// <param name="mmPerPix">Size of a pixel at the eye, in mm, for the pupil area. NaN if unknown.</param>
         /// <returns></returns>
-        public EyeCollection<CalibratedEyeData> GetCalibratedEyeData(EyeCollection<EyeData?> eyeDataRaw)
+        public EyeCollection<CalibratedEyeData> GetCalibratedEyeData(EyeCollection<EyeData?> eyeDataRaw, double mmPerPix = double.NaN)
         {
             if (eyeDataRaw is null) throw new ArgumentNullException(nameof(eyeDataRaw));
 
             return new EyeCollection<CalibratedEyeData>(
-                GetCalibratedEyeData(eyeDataRaw[Eye.Left]),
-                GetCalibratedEyeData(eyeDataRaw[Eye.Right]));
+                GetCalibratedEyeData(eyeDataRaw[Eye.Left], mmPerPix),
+                GetCalibratedEyeData(eyeDataRaw[Eye.Right], mmPerPix));
         }
 
         /// <summary>
@@ -263,19 +281,18 @@ namespace OpenIris
         /// <returns>Calibrated data.</returns>
         public CalibratedHeadData GetCalibratedHeadData(HeadData? headData)
         {
-            if (headData is null) return new CalibratedHeadData();
+            // Without a head sensor, all 0 (Atan2 of zeros would give ±180°).
+            if (headData is null || headData.IsEmpty) return new CalibratedHeadData();
+
+            // Not yet checked against the convention of CalibratedHeadData (see #70). Written for
+            // the Micromedical head sensor: Yaw can't really come from the accelerometer. The
+            // gyroscope and accelerometer are in the data file, raw.
 
             return new CalibratedHeadData
             {
-                XAcceleration = headData.AccelerometerX,
-                YAcceleration = headData.AccelerometerY,
-                ZAcceleration = headData.AccelerometerZ,
                 Roll = Math.Atan2(-headData.AccelerometerZ, -headData.AccelerometerX) * 180.0 / Math.PI,
                 Pitch = Math.Atan2(headData.AccelerometerY, -headData.AccelerometerX) * 180.0 / Math.PI,
                 Yaw = Math.Atan2(-headData.AccelerometerZ, headData.AccelerometerY) * 180.0 / Math.PI,
-                YawVelocity = headData.GyroX,
-                PitchVelocity = headData.GyroY,
-                RollVelocity = headData.GyroZ
             };
         }
 

@@ -1,5 +1,6 @@
 ﻿// <copyright file="PupilTrackerBlob.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageProcessing
@@ -9,7 +10,6 @@ namespace OpenIris.ImageProcessing
     using System;
     using System.Drawing;
     using Emgu.CV;
-    using Emgu.CV.Cvb;
     using Emgu.CV.CvEnum;
     using Emgu.CV.Structure;
 
@@ -34,16 +34,13 @@ namespace OpenIris.ImageProcessing
             Blob,
         }
 
-        private readonly CvBlobDetector detector = new CvBlobDetector();
-        private readonly CvBlobs blobs = new CvBlobs();
+        private readonly BlobDetector detector = new BlobDetector();
 
         /// <summary>
         /// Dispose objects
         /// </summary>
         public void Dispose()
         {
-            blobs.Dispose();
-            detector.Dispose();
         }
 
         /// <summary>
@@ -65,17 +62,16 @@ namespace OpenIris.ImageProcessing
 
             return trackingSettings.PupilTrackingMethod switch
             {
-                PupilTrackingMethod.Blob => FindPupilBlob(detector, blobs, imageEye, eyeRoi, maxPupRad, minPupArea, imageSize, thresholdDark),
+                PupilTrackingMethod.Blob => FindPupilBlob(detector, imageEye, eyeRoi, maxPupRad, minPupArea, imageSize, thresholdDark),
                 PupilTrackingMethod.Centroid => FindPupilCentroid(imageEye, eyeRoi, thresholdDark),
                 _ => new PupilData(),
             };
         }
 
         /// <summary>
-        /// Finds the pupil. Careful with multithreading and the prealocation of detector, blobs and kernel. 
+        /// Finds the pupil. Careful with multithreading and the prealocation of detector and kernel. 
         /// </summary>
         /// <param name="detector"></param>
-        /// <param name="blobs"></param>
         /// <param name="imageEye">Image of the eye.</param>
         /// <param name="eyeRoi">Roi containing the pupil.</param>
         /// <param name="maxPupRad">Maximum radious of the pupil in pixels.</param>
@@ -83,10 +79,9 @@ namespace OpenIris.ImageProcessing
         /// <param name="imageSize">Size of the image used for searching blobs.</param>
         /// <param name="thresholdDark">Threshold to find dark pixels.</param>
         /// <returns>Pupil ellipse.</returns>
-        public static PupilData FindPupilBlob(CvBlobDetector detector, CvBlobs blobs, ImageEye imageEye, Rectangle eyeRoi, double maxPupRad, double minPupArea, int imageSize, int thresholdDark)
+        public static PupilData FindPupilBlob(BlobDetector detector, ImageEye imageEye, Rectangle eyeRoi, double maxPupRad, double minPupArea, int imageSize, int thresholdDark)
         {
             if (detector is null) throw new ArgumentNullException(nameof(detector));
-            if (blobs is null) throw new ArgumentNullException(nameof(blobs));
             if (imageEye is null) throw new ArgumentNullException(nameof(imageEye));
 
             // Reduce the image to incrase processing speed because precision at this point is not
@@ -106,7 +101,7 @@ namespace OpenIris.ImageProcessing
             // Optimize the blobs by removing small white or black spots
             ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            var kernel = CvInvoke.GetStructuringElement(ElementShape.Ellipse, new Size(3, 3), new Point(1, 1));
+            var kernel = CvInvoke.GetStructuringElement(MorphShapes.Ellipse, new Size(3, 3), new Point(1, 1));
             var center = new Point(-1, -1);
             var one = new MCvScalar(1);
 
@@ -132,13 +127,10 @@ namespace OpenIris.ImageProcessing
             // Score of the blob with the maximum score.
             var maxScore = 0.0;
 
-            detector.Detect(imageThreshold, blobs);
-            foreach (var item in blobs)
+            foreach (var blob in detector.Detect(imageThreshold))
             {
-                CvBlob blob = item.Value;
-
                 // If area is too small
-                if (blob.Area < minPupArea * scaleDownX)
+                if (blob.Area < minPupArea * scaleDownX * scaleDownY)
                 {
                     continue;
                 }
@@ -148,8 +140,6 @@ namespace OpenIris.ImageProcessing
                 {
                     continue;
                 }
-
-                var contour = blob.GetContour();
 
                 // the score is the ratio between area and perimeter
                 var score = blob.Area / (double)(blob.BoundingBox.Width * blob.BoundingBox.Height);

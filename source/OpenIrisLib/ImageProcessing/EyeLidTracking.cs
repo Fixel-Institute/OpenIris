@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeLidTrackerHoughLines.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageProcessing
@@ -12,7 +13,6 @@ namespace OpenIris.ImageProcessing
     using Emgu.CV;
     using Emgu.CV.Structure;
     using Emgu.CV.Util;
-    using OpenIris.UI;
 
     /// <summary>
     /// Tracks the eyelids using the Hough transform. It finds four segments of the eyelids independently around the pupil.
@@ -315,7 +315,7 @@ namespace OpenIris.ImageProcessing
                     Eyelids = eyelidData,
                 };
 
-                ImageEyeBox.DrawEyelids(imageDebugParabola, data, eyeGlobe);
+                EyeImageOverlay.DrawEyelids(imageDebugParabola, data, eyeGlobe);
                 EyeTrackerDebug.AddImage("EyelidParabolas", imageEye.WhichEye, imageDebugParabola);
             }
 
@@ -410,7 +410,7 @@ namespace OpenIris.ImageProcessing
 
             // Low pass filter in the horizontal direction and high pass second order filter in the 
             // vertical direction
-            image = image.SmoothBlur(4, 4);
+            image = image.SmoothBlur(5, 5); // Odd, so it doesn't shift the image.
             var sob1 = image.Sobel(0, 2, 5).Convert<Gray, byte>();
             var sob2 = image.Sobel(2, 0, 5).Convert<Gray, byte>();
 

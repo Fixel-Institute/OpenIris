@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackingSystemBase.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -12,7 +13,6 @@ namespace OpenIris
     using System.Drawing;
     using System.Linq;
     using System.Runtime.Serialization;
-    using System.Windows.Forms;
     using OpenIris.ImageGrabbing;
 
     /// <summary>
@@ -38,6 +38,13 @@ namespace OpenIris
         /// Settings of the system.
         /// </summary>
         public EyeTrackingSystemSettings Settings { get; private set; }
+
+        /// <summary>
+        /// Gets the most frames from the cameras that OpenIris holds at once in its buffers (<see
+        /// cref="EyeTracker.MaxFramesInBuffers"/>), set before the cameras are created. Cameras that
+        /// give images without copying them need at least this many buffers of their own.
+        /// </summary>
+        public int MaxFramesInBuffers { get; internal set; }
 
         /// <summary>
         /// Image sources (cameras or videos) of this eye tracking system.
@@ -78,6 +85,12 @@ namespace OpenIris
         {
             var cameras = CreateAndStartCameras();
             imageSources = new EyeCollection<IImageEyeSource?>(cameras.Select(c => c as IImageEyeSource));
+
+            foreach (var camera in cameras ?? Enumerable.Empty<CameraEye?>())
+            {
+                if (camera is not null) camera.Intrinsics = Settings.IntrinsicsOf(camera);
+            }
+
             return cameras;
         }
 
@@ -163,16 +176,15 @@ namespace OpenIris
         public virtual EyeTrackerImagesAndData PostProcessImagesAndData(EyeTrackerImagesAndData procesedImages) => procesedImages;
 
         /// <summary>
-        /// Opens a custom UI for this eye tracking system.
+        /// Gets the actions of this system that the user can run. The Windows user interface shows
+        /// them in the System menu.
         /// </summary>
-        /// <returns></returns>
-        public virtual Form? OpenEyeTrackingSystemUI => null;
-
-        /// <summary>
-        /// Gets custom menu items for this system to show in the main window
-        /// </summary>
-        /// <returns></returns>
-        public virtual ToolStripMenuItem[]? GetToolStripMenuItems() => null;
+        /// <remarks>
+        /// To give the system a window, don't open it here: export a view for the user interface
+        /// instead (in the Windows user interface, an EyeTrackingSystemWindow), so the system itself
+        /// doesn't depend on any user interface library.
+        /// </remarks>
+        public virtual EyeTrackingSystemCommand[]? GetCommands() => null;
 
         /// <summary>
         /// Gets a value indicating weather the cameras can move the ROI.
@@ -313,9 +325,100 @@ namespace OpenIris
         }
         private double pixPerMm = 6;
 
-        [Category("Camera properties"), Description("Distance from the camera to the eye ( mm)")]
-        public virtual double DistanceCameraToEyeMm { get => distanceCameraToEyeMm; set => SetProperty(ref distanceCameraToEyeMm, value, nameof(DistanceCameraToEyeMm)); }
-        private double distanceCameraToEyeMm = 50; // default value
+        [Category("Camera properties"), Description("Intrinsics of the cameras from a camera calibration, as OpenCV gives them: one for a camera that sees both eyes, " +
+            "or left and right, as the cameras of the system. For the whole sensor and the images as the camera sends them (before the camera orientation). " +
+            "Unknown (Fx 0): from the sensor size and PixPerMm. Calibrate again after changing them.")]
+        [NeedsRestarting]
+        [TypeConverter(typeof(EyeCollectionConverter<CameraIntrinsics>))]
+        public EyeCollection<CameraIntrinsics>? CameraIntrinsics { get => cameraIntrinsics; set => SetProperty(ref cameraIntrinsics, value, nameof(CameraIntrinsics)); }
+        private EyeCollection<CameraIntrinsics>? cameraIntrinsics;
+
+        /// <summary>
+        /// Unknown intrinsics for each camera of a system: one, or left and right.
+        /// </summary>
+        /// <param name="cameras">The cameras of the system, as its attribute says.</param>
+        public static EyeCollection<CameraIntrinsics> UnknownIntrinsics(VideoEyeConfiguration cameras) => Unknown<CameraIntrinsics>(cameras);
+
+        /// <summary>
+        /// Unknown values (default) for each camera of a system: one, or left and right.
+        /// </summary>
+        /// <param name="cameras">The cameras of the system, as its attribute says.</param>
+        public static EyeCollection<T> Unknown<T>(VideoEyeConfiguration cameras) where T : struct =>
+            cameras == VideoEyeConfiguration.OneVideo
+                ? new EyeCollection<T>(default(T))
+                : new EyeCollection<T>(default, default);
+
+        /// <summary>
+        /// The intrinsics of a camera: measured, from the settings, or else from the pixel scale.
+        /// </summary>
+        public CameraIntrinsics IntrinsicsOf(CameraEye camera)
+        {
+            var measured = (CameraIntrinsics?.Count, camera.WhichEye) switch
+            {
+                (1, Eye.Both) or (2, Eye.Left) or (2, Eye.Right) => CameraIntrinsics![camera.WhichEye],
+                _ => default,
+            };
+
+            return measured.IsEmpty ? OpenIris.CameraIntrinsics.FromPixelScale(camera.SensorSize, PixPerMm) : measured;
+        }
+
+        [Category("Camera properties"), Description("Where each camera is and how it's turned, as OpenCV's rvec (radians) and tvec (mm): from the head frame " +
+            "(x forward, y to the subject's left, z up, origin at the center of the eye the camera looks at, or between the eyes for a camera that sees both) " +
+            "to the camera's (x right, y down, z forward, in the image after the camera orientation). One for a camera that sees both eyes, or left and right. " +
+            "Unknown (tvec 0): facing the eye, with the image's up as the head's up. Calibrate again after changing them.")]
+        [TypeConverter(typeof(EyeCollectionConverter<CameraExtrinsics>))]
+        public EyeCollection<CameraExtrinsics>? CameraExtrinsics { get => cameraExtrinsics; set => SetProperty(ref cameraExtrinsics, value, nameof(CameraExtrinsics)); }
+        private EyeCollection<CameraExtrinsics>? cameraExtrinsics;
+
+        /// <summary>
+        /// The extrinsics of the camera that sees an eye: measured, from the settings, or else facing
+        /// the eye at the assumed distance.
+        /// </summary>
+        /// <param name="eye">The eye.</param>
+        public CameraExtrinsics ExtrinsicsOf(Eye eye)
+        {
+            var measured = (CameraExtrinsics?.Count, eye) switch
+            {
+                (1, _) => CameraExtrinsics![Eye.Both],
+                (2, Eye.Left) or (2, Eye.Right) => CameraExtrinsics![eye],
+                _ => default,
+            };
+
+            return measured.IsEmpty ? OpenIris.CameraExtrinsics.Facing(OpenIris.CameraIntrinsics.AssumedDistanceToEyeMm) : measured;
+        }
+
+        [Category("Camera properties"), Description("The lights (LEDs) of the system, that make the corneal reflections: their positions in mm in the head frame " +
+            "with the origin between the eyes (x forward, y to the subject's left, z up). None, one or more, as the system has. (0, 0, 0) if unknown.")]
+        public LightPosition[] Lights { get => lights; set => SetProperty(ref lights, value, nameof(Lights)); }
+        private LightPosition[] lights = new LightPosition[0];
+
+        [Category("Stimulus display"), Description("Width of the visible part of the screen where the calibration targets are shown, in mm.")]
+        public double ScreenWidthMm { get => screenWidthMm; set => SetProperty(ref screenWidthMm, value, nameof(ScreenWidthMm)); }
+        private double screenWidthMm = 530;
+
+        [Category("Stimulus display"), Description("Distance from the eyes to the screen, in mm.")]
+        public double ViewingDistanceMm { get => viewingDistanceMm; set => SetProperty(ref viewingDistanceMm, value, nameof(ViewingDistanceMm)); }
+        private double viewingDistanceMm = 570;
+
+        [Category("Stimulus display"), Description("The display where OpenIris shows the calibration targets itself (N-point calibration, Local mode): " +
+            "its number in Windows' display settings (1, 2...). 0 for the main display.")]
+        public int StimulusDisplay { get => stimulusDisplay; set => SetProperty(ref stimulusDisplay, value, nameof(StimulusDisplay)); }
+        private int stimulusDisplay = 0;
+
+        [Category("Camera properties"), Description("Distance between the centers of the eyes, in mm, to know where the lights are from each eye.")]
+        public double DistanceBetweenEyesMm { get => distanceBetweenEyesMm; set => SetProperty(ref distanceBetweenEyesMm, value, nameof(DistanceBetweenEyesMm)); }
+        private double distanceBetweenEyesMm = 63;
+
+        /// <summary>
+        /// The lights, from the center of an eye (between the eyes for Both). Unknown lights stay unknown.
+        /// </summary>
+        /// <param name="eye">The eye.</param>
+        public LightPosition[] LightsFrom(Eye eye)
+        {
+            // The left eye is to the left (+y) of the point between the eyes.
+            var eyeY = eye switch { Eye.Left => DistanceBetweenEyesMm / 2, Eye.Right => -DistanceBetweenEyesMm / 2, _ => 0 };
+            return Lights.Select(light => light.IsEmpty ? light : new LightPosition(light.X, (float)(light.Y - eyeY), light.Z)).ToArray();
+        }
 
         [Category("Camera properties"), Description("Camera frame rate")]
         [NeedsRestarting]

@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackingPipelineSimpleCentroid.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -13,7 +14,6 @@ namespace OpenIris
     using System.Drawing;
     using System.ComponentModel.Composition;
     using System.Collections.Generic;
-    using OpenIris.UI;
 
     /// <summary>
     /// Class in charge of processing images and tracking the pupil and iris to obtain the eye
@@ -37,8 +37,8 @@ namespace OpenIris
 
             // Copy the calibration variables just in case they change during the processing to avoid
             // inconsistencies The next frame will use the updated calibration
-            var eyeModel = eyeCalibrationParameters.EyePhysicalModel;
-            var referencePupil = eyeCalibrationParameters.ReferenceData.Pupil;
+            var eyeModel = eyeCalibrationParameters.EyeModelFor(imageEye.Intrinsics);
+            var referencePupil = eyeCalibrationParameters.ReferencePupilFor(imageEye.Intrinsics);
             var referenceTorsionImage = eyeCalibrationParameters.ImageTorsionReference;
             var eyeROI = imageEye.WhichEye == Eye.Left ? settings.CroppingLeftEye : settings.CroppingRightEye;
             var thresholdDark = (imageEye.WhichEye == Eye.Left) ? settings.DarkThresholdLeftEye : settings.DarkThresholdRightEye;

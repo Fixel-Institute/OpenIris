@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ImageEye.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -12,6 +13,7 @@ namespace OpenIris
     using System.Runtime.Serialization;
     using System.Security.Permissions;
     using Emgu.CV;
+    using Emgu.CV.CvEnum;
     using Emgu.CV.Structure;
     using OpenIris.ImageGrabbing;
 
@@ -32,19 +34,6 @@ namespace OpenIris
             WhichEye = whichEye;
             TimeStamp = timeStamp;
             ImageSourceData = extraData;
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the ImageEye class.
-        /// </summary>
-        /// <param name="bitmap">Bitmap of the image.</param>
-        /// <param name="whichEye">The eye.</param>
-        /// <param name="timeStamp">The timestamp.</param>
-        public ImageEye(Bitmap bitmap, Eye whichEye, ImageEyeTimestamp timeStamp)
-        {
-            Image = new Image<Gray, byte>(bitmap);
-            WhichEye = whichEye;
-            TimeStamp = timeStamp;
         }
 
         /// <summary>
@@ -92,6 +81,23 @@ namespace OpenIris
         /// Gets Left or Right Eye.
         /// </summary>
         public Eye WhichEye { get; set; }
+
+        /// <summary>
+        /// Gets or sets where this image is in the full image of the camera, in the camera's pixels:
+        /// the window of the sensor for cameras that read only part of it, the part cut out for
+        /// systems that cut each eye out of a bigger image, or the whole frame. Empty if unknown.
+        /// Written in the RoiX, RoiY, RoiWidth and RoiHeight columns of the data file.
+        /// </summary>
+        public Rectangle Roi { get; set; }
+
+        /// <summary>
+        /// Gets or sets the intrinsics of the camera in the pixels of this image: the camera's
+        /// intrinsics moved to the window it read, then changed by every crop, flip and transposition
+        /// of the image (the methods of this class do it). Empty if unknown, for example for images
+        /// from videos. The calibration uses them to follow the image when the window of the camera
+        /// moves (#61).
+        /// </summary>
+        public CameraIntrinsics Intrinsics { get; set; }
         
         /// <summary>
         /// Gets the size of the image of the eye in pixels.
@@ -120,7 +126,7 @@ namespace OpenIris
         /// <returns>The copy.</returns>
         public ImageEye Copy(Rectangle roi)
         {
-            return new ImageEye(Image.Copy(roi), WhichEye, TimeStamp, ImageSourceData);
+            return new ImageEye(Image.Copy(roi), WhichEye, TimeStamp, ImageSourceData) { Roi = PartOfRoi(roi), Intrinsics = Intrinsics.Cropped(roi.Location) };
         }
 
         /// <summary>
@@ -129,66 +135,59 @@ namespace OpenIris
         /// <returns>The copy.</returns>
         public ImageEye Copy()
         {
-            return new ImageEye(Image.Copy(), WhichEye, TimeStamp, ImageSourceData);
+            return new ImageEye(Image.Copy(), WhichEye, TimeStamp, ImageSourceData) { Roi = Roi, Intrinsics = Intrinsics };
         }
 
         /// <summary>
-        /// Or when there are mirrors.
+        /// The ROI of a part of this image, if this image's ROI is known.
+        /// </summary>
+        private Rectangle PartOfRoi(Rectangle part) =>
+            Roi.IsEmpty ? Rectangle.Empty : new Rectangle(Roi.X + part.X, Roi.Y + part.Y, part.Width, part.Height);
+
+        /// <summary>
+        /// Turns the image to correct the orientation of the camera, when it is rotated or there
+        /// are mirrors: first rotated (clockwise by the angle of the orientation), then mirrored
+        /// horizontally. Flips are done in place, and only a rotation by 90 or 270 degrees, which
+        /// changes the size of the image, makes a new one. This runs for every frame.
         /// </summary>
         /// <param name="cameraOrientation">Orientation of the camera reltive to the eye.</param>
-        /// <returns>The new images with the correct orientation.</returns>
         public void CorrectOrientation(CameraOrientation cameraOrientation)
         {
-            if (!cameraOrientation.IsRotated())
+            switch (cameraOrientation)
             {
-                // Fix the image
-                if (!cameraOrientation.IsMirrored() && !cameraOrientation.IsUpsideDown())
-                {
-                    // Do nothing
-                }
-
-                if (!cameraOrientation.IsMirrored() && cameraOrientation.IsUpsideDown())
-                {
-                    FlipHorizontal();
-                    FlipVertical();
-                }
-
-                if (cameraOrientation.IsMirrored() && !cameraOrientation.IsUpsideDown())
-                {
-                    FlipHorizontal();
-                }
-
-                if (cameraOrientation.IsMirrored() && cameraOrientation.IsUpsideDown())
-                {
-                    FlipVertical();
-                }
+                case CameraOrientation.Upright:
+                    break;
+                case CameraOrientation.UprightMirrored:
+                    FlipInPlace(FlipType.Horizontal);
+                    break;
+                case CameraOrientation.Rotated180:
+                    FlipInPlace(FlipType.Both);
+                    break;
+                case CameraOrientation.Rotated180Mirrored:
+                    FlipInPlace(FlipType.Vertical);
+                    break;
+                case CameraOrientation.Rotated90:
+                    Transpose();
+                    FlipInPlace(FlipType.Horizontal);
+                    break;
+                case CameraOrientation.Rotated90Mirrored:
+                    Transpose();
+                    break;
+                case CameraOrientation.Rotated270:
+                    Transpose();
+                    FlipInPlace(FlipType.Vertical);
+                    break;
+                case CameraOrientation.Rotated270Mirrored:
+                    Transpose();
+                    FlipInPlace(FlipType.Both);
+                    break;
             }
-            else
-            {
-                Transpose();
+        }
 
-                // Fix the image
-                if (!cameraOrientation.IsMirrored() && !cameraOrientation.IsUpsideDown())
-                {
-                    // Do nothing
-                }
-
-                if (!cameraOrientation.IsMirrored() && cameraOrientation.IsUpsideDown())
-                {
-                    FlipHorizontal();
-                    FlipVertical();
-                }
-
-                if (cameraOrientation.IsMirrored() && !cameraOrientation.IsUpsideDown())
-                {
-                    FlipHorizontal();
-                }
-
-                if (cameraOrientation.IsMirrored() && cameraOrientation.IsUpsideDown())
-                {
-                    FlipVertical();
-                }
-            }
+        private void FlipInPlace(FlipType flipType)
+        {
+            Intrinsics = Intrinsics.Flipped(flipType, Size);
+            CvInvoke.Flip(Image, Image, flipType);
         }
 
         /// <summary>
@@ -196,6 +195,7 @@ namespace OpenIris
         /// </summary>
         public void Rotate180()
         {
+            Intrinsics = Intrinsics.Flipped(FlipType.Both, Size);
             Image = Image.Flip(Emgu.CV.CvEnum.FlipType.Horizontal).Flip(Emgu.CV.CvEnum.FlipType.Vertical);
         }
 
@@ -204,6 +204,7 @@ namespace OpenIris
         /// </summary>
         public void FlipHorizontal()
         {
+            Intrinsics = Intrinsics.Flipped(FlipType.Horizontal, Size);
             Image = Image.Flip(Emgu.CV.CvEnum.FlipType.Horizontal);
         }
 
@@ -212,6 +213,7 @@ namespace OpenIris
         /// </summary>
         public void FlipVertical()
         {
+            Intrinsics = Intrinsics.Flipped(FlipType.Vertical, Size);
             Image = Image.Flip(Emgu.CV.CvEnum.FlipType.Vertical);
         }
 
@@ -223,6 +225,7 @@ namespace OpenIris
             var imageTemp = new Image<Gray, byte>(Size.Height, Size.Width);
             CvInvoke.Transpose(Image, imageTemp);
             Image = imageTemp;
+            Intrinsics = Intrinsics.Transposed();
         }
                 
         /// <summary>
@@ -233,6 +236,7 @@ namespace OpenIris
         public void Crop(Rectangle roi)
         {
             Image = Image.Copy(roi);
+            Intrinsics = Intrinsics.Cropped(roi.Location);
         }
 
         /// <summary>
@@ -247,8 +251,9 @@ namespace OpenIris
             CvInvoke.Transpose(Image, imageTemp);
             Image.ROI = new Rectangle();
             Image = imageTemp;
+            Intrinsics = Intrinsics.Cropped(roi.Location).Transposed();
 
-            return new ImageEye(imageTemp, WhichEye, TimeStamp, ImageSourceData);
+            return new ImageEye(imageTemp, WhichEye, TimeStamp, ImageSourceData) { Roi = PartOfRoi(roi), Intrinsics = Intrinsics };
         }
                 
         /// <summary>

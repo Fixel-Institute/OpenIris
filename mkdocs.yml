@@ -1,0 +1,119 @@
+# Documentation website, built from docs/ with MkDocs and published on GitHub Pages by
+# .github/workflows/docs.yml. To preview it locally:
+#   pip install -r docs/requirements.txt
+#   mkdocs serve
+site_name: OpenIris
+site_description: Open-source framework for video-based eye tracking.
+site_url: https://omlab.berkeley.edu/OpenIris/
+repo_url: https://github.com/ocular-motor-lab/OpenIris
+repo_name: ocular-motor-lab/OpenIris
+edit_uri: edit/main/docs/
+copyright: Ocular Motor Lab, UC Berkeley. OpenIris is licensed under the GNU AGPL v3.
+extra:
+  social:
+    - icon: material/bug-outline
+      link: https://github.com/ocular-motor-lab/OpenIris/issues
+      name: Report a bug on GitHub
+    - icon: fontawesome/brands/github
+      link: https://github.com/ocular-motor-lab/OpenIris
+      name: OpenIris on GitHub
+
+docs_dir: docs
+# The site's home page is docs/index.md; docs/README.md is the index GitHub shows for the folder.
+# docs/requirements.txt lists the tools to build the site.
+exclude_docs: |
+  /README.md
+  /requirements.txt
+
+nav:
+  - Home: index.md
+  - User manual:
+      - user-manual/README.md
+      - Basics:
+          - Installation: user-manual/installation.md
+          - Configuration: user-manual/configuration.md
+          - Tracking and recording: user-manual/tracking-and-recording.md
+          - Calibration: user-manual/calibration.md
+          - The data file: user-manual/data-file.md
+          - Remote control: user-manual/remote-control.md
+          - Playing and processing videos: user-manual/processing-videos.md
+          - Webcam tracking: user-manual/webcam-tracking.md
+          - Troubleshooting: user-manual/troubleshooting.md
+      - Advanced:
+          - Camera calibration: user-manual/camera-calibration.md
+          - Labeling videos by hand: user-manual/manual-labeling.md
+          - Plugins: user-manual/plugins.md
+          - Hardware: user-manual/hardware.md
+  - Plugin development:
+      - plugin-development/README.md
+      - How OpenIris works: plugin-development/architecture.md
+      - Creating a plugin: plugin-development/creating-a-plugin.md
+      - Eye tracking systems: plugin-development/eye-tracking-systems.md
+      - Tracking pipelines: plugin-development/tracking-pipelines.md
+      - Calibration pipelines: plugin-development/calibration-pipelines.md
+      - Geometry and conventions: plugin-development/geometry.md
+      - Building from source: plugin-development/building.md
+      - Contributing: plugin-development/contributing.md
+      - Known image processing issues: plugin-development/image-processing-improvements.md
+
+theme:
+  name: material
+  logo: images/logo.svg
+  favicon: images/favicon.png
+  # Helvetica, like the lab website (set in stylesheets/openiris.css), instead of Google Fonts.
+  font: false
+  features:
+    - navigation.tabs
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+plugins:
+  - search
+  # Shows GitHub's "> [!NOTE]" style notes as Material admonitions, so the same Markdown works
+  # on GitHub and on the site.
+  - gh-admonitions
+
+extra_css:
+  - stylesheets/openiris.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: info

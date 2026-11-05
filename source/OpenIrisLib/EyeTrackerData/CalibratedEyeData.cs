@@ -1,11 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CalibratedEyeData.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
 {
     using System;
+    using System.Numerics;
 
     /// <summary>
     /// Form: http://www.opt.indiana.edu/v665/CD/CD_Version/CH3/CH3.HTM Much of the effort in
@@ -56,32 +58,80 @@ namespace OpenIris
     }
 
     /// <summary>
-    /// Calibrated data. Calculated from the raw data using the CalibrationInfo.
+    /// Calibrated eye data, calculated from the raw data with the calibration
+    /// (CalibrationParameters.GetCalibratedEyeData).
     /// </summary>
+    /// <remarks>
+    /// <para>Coordinate convention, the same for the eyes and the head (see CalibratedHeadData):
+    /// positive is rightward, upward and clockwise, all from the subject's point of view.</para>
+    /// <list type="bullet">
+    /// <item>HorizontalPosition: degrees, positive when the eye looks to the subject's right.</item>
+    /// <item>VerticalPosition: degrees, positive when the eye looks up.</item>
+    /// <item>TorsionalPosition: degrees, positive when the eye rotates clockwise as the subject sees
+    /// it (the top of the eye moves towards the subject's right; counterclockwise in the image).</item>
+    /// </list>
+    /// <para>All three are relative to the eye at the calibration's reference, so 0 is the reference
+    /// position.</para>
+    /// <para>The signs and the zero are the contract. How the three angles combine into an
+    /// orientation (Fick, Helmholtz, rotation vectors...) is up to whatever calculates them, which
+    /// must say which one it uses. Today that is CalibrationParameters.GetCalibratedEyeData for all
+    /// the calibration methods: the Fick angles of the rotation of the eye from the reference
+    /// (EyeRotationMath), with Listing's law (Listing's plane perpendicular to the line of sight at
+    /// the reference) plus the measured torsion.</para>
+    /// <para>The signs assume the eye images show the eyes as seen by someone facing the subject (the
+    /// subject's right is the left of the image, up is up). Each eye tracking system makes its images
+    /// look like that with its camera orientation (CameraEye.CameraOrientation); a camera that sees
+    /// the eye through a mirror needs a mirrored orientation.</para>
+    /// </remarks>
     public struct CalibratedEyeData : IEquatable<CalibratedEyeData>
     {
-        // TODO: MOVE TO TRANSFORMS then all the simple values can be getters out of the matrix.
+        // Could be stored as a transform, with these values as getters (see #61).
 
         /// <summary>
         /// Gets or sets the horizontal position of the eye, in degrees, relative to the reference
-        /// position during calibration.
+        /// position during calibration. Positive towards the subject's right.
         /// </summary>
         public double HorizontalPosition { get; set; }
 
         /// <summary>
         /// Gets or sets the vertical position of the eye, in degrees, relative to the reference
-        /// position during calibration.
+        /// position during calibration. Positive up.
         /// </summary>
         public double VerticalPosition { get; set; }
 
         /// <summary>
         /// Gets or sets the torsional position of the eye, in degrees, relative to the reference
-        /// position during calibration.
+        /// position during calibration. Positive clockwise from the subject's point of view (the top
+        /// of the eye towards the subject's right).
         /// </summary>
         public double TorsionalPosition { get; set; }
 
         /// <summary>
-        /// Gets or sets the pupil Area, in squared milimeters.
+        /// The data of an eye that isn't tracked: angles NaN, the rest 0.
+        /// </summary>
+        public static readonly CalibratedEyeData NotTracked = new CalibratedEyeData { HorizontalPosition = double.NaN, VerticalPosition = double.NaN, TorsionalPosition = double.NaN };
+
+        /// <summary>
+        /// Gets the line of sight, as a unit vector: x to the subject's right, y up, z forward, with
+        /// (0, 0, 1) at the reference. From the three angles as Fick angles. NaN if they are.
+        /// </summary>
+        public Vector3 Gaze => GetGazeAndUp().gaze;
+
+        /// <summary>
+        /// Gets the up direction of the eye (where the top of the eye points), as a unit vector with
+        /// the axes of Gaze, (0, 1, 0) at the reference. If the torsion is unknown (NaN), the one of
+        /// Listing's law.
+        /// </summary>
+        public Vector3 Up => GetGazeAndUp().up;
+
+        /// <summary>
+        /// Gets Gaze and Up, calculated together. A method, so it isn't serialized with the data.
+        /// </summary>
+        public (Vector3 gaze, Vector3 up) GetGazeAndUp() => EyeRotationMath.GazeAndUp(EyeRotationMath.FromFickAngles(HorizontalPosition, VerticalPosition, TorsionalPosition));
+
+        /// <summary>
+        /// Gets or sets the area of the pupil ellipse, in mm², with the pixel scale (MmPerPix). NaN if
+        /// the pixel scale is unknown.
         /// </summary>
         public double PupilArea { get; set; }
 
@@ -161,95 +211,6 @@ namespace OpenIris
         public static bool operator !=(CalibratedEyeData data1, CalibratedEyeData data2)
         {
             return !data1.Equals(data2);
-        }
-    }
-
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
-
-    /// <summary>
-    /// Calibrated head data. Calculated from the raw data using the HeadCalibration.
-    /// Coordinate conventions according to Fetter and Haslwanter 1998: 
-    /// When the head is in its reference position, upright and facing straight 
-    /// ahead – the x-axis points forward, the y-axis left along the interaural 
-    /// line, and the z axis points up.
-    /// According to the right hand rule the positive rotation directions in this 
-    /// coordinate system are clockwise, down, and left(as seen from the subject’s viewpoint)
-    /// </summary>
-    public struct CalibratedHeadData : IEquatable<CalibratedHeadData>
-    {
-        public double XAcceleration { get; set; }
-        public double YAcceleration { get; set; }
-        public double ZAcceleration { get; set; }
-
-        public double Roll { get; set; }
-        public double Pitch { get; set; }
-        public double Yaw { get; set; }
-
-        public double RollVelocity { get; set; }
-        public double PitchVelocity { get; set; }
-        public double YawVelocity { get; set; }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="obj"></param>
-        /// <returns></returns>
-        public override bool Equals(object obj)
-        {
-            if ( obj is CalibratedHeadData c)
-            {
-                return c.Equals(this);
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="other"></param>
-        /// <returns></returns>
-        public bool Equals(CalibratedHeadData other)
-        {
-            return (XAcceleration == other.XAcceleration) &&
-                (YAcceleration == other.YAcceleration) &&
-                (ZAcceleration == other.XAcceleration) &&
-                (Roll == other.Roll) &&
-                (Pitch == other.Pitch) &&
-                (Yaw == other.Yaw) &&
-                (RollVelocity == other.RollVelocity) &&
-                (PitchVelocity == other.PitchVelocity) &&
-                (YawVelocity == other.YawVelocity);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <returns></returns>
-        public override int GetHashCode()
-        {
-            return (int)(XAcceleration * YAcceleration * ZAcceleration * Roll * Pitch * Yaw);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="left"></param>
-        /// <param name="right"></param>
-        /// <returns></returns>
-        public static bool operator ==(CalibratedHeadData left, CalibratedHeadData right)
-        {
-            return left.Equals(right);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="left"></param>
-        /// <param name="right"></param>
-        /// <returns></returns>
-        public static bool operator !=(CalibratedHeadData left, CalibratedHeadData right)
-        {
-            return !(left == right);
         }
     }
 }

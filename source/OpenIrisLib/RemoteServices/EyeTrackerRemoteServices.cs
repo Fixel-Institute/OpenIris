@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackerService.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -12,8 +13,6 @@ namespace OpenIris
     using System.Net.NetworkInformation;
     using System.Net.Sockets;
     using System.Net;
-    using System.ServiceModel;
-    using System.ServiceModel.Description;
     using System.Text;
 
     /// <summary>
@@ -21,10 +20,10 @@ namespace OpenIris
     /// </summary>
     public class EyeTrackerRemoteServices
     {
-        private static ServiceHost? eyeTrackerHostNetTcp;
-        private static ServiceHost? eyeTrackerHostWeb;
+        private static EyeTrackerWebServer? eyeTrackerWebServer;
         private static EyeTrackerTcpListener? eyeTrackerHostTcp = null;
         private static EyeTrackerUdpListener? eyeTrackerHostUdp = null;
+        private static EyeTrackerLslOutlet? eyeTrackerLslOutlet = null;
 
         /// <summary>
         /// Starts the service.
@@ -33,62 +32,16 @@ namespace OpenIris
         /// <returns>The service host object.</returns>
         public static void Start(EyeTracker newEyeTracker)
         {
-            var eyeTracker = new EyeTrackerRemote(newEyeTracker);
-
-            // NET TCP SERVICE
+            // WEB SERVER: REST API, live data and web client. It replaces the WCF web endpoint
+            // that was on this port, and keeps its URLs (/EyeTrackerEndpoint/Web/StartRecording...).
             try
             {
-                eyeTrackerHostNetTcp = new ServiceHost(eyeTracker);
-                var binding = new NetTcpBinding();
-                binding.MaxReceivedMessageSize = 2147483647;
-                binding.Security.Mode = SecurityMode.None;
-
-                var address = "net.tcp://localhost:" + newEyeTracker.Settings.ServiceListeningPort + "/EyeTrackerEndpoint";
-                var e = eyeTrackerHostNetTcp.AddServiceEndpoint(typeof(IEyeTrackerService), binding, address);
-
-                eyeTrackerHostNetTcp.Open();
+                eyeTrackerWebServer = new EyeTrackerWebServer(newEyeTracker, newEyeTracker.Settings.ServiceListeningPort + 1);
             }
             catch (Exception ex)
             {
-                Trace.WriteLine("Error starting NET TCP service: " + ex.Message);
-                eyeTrackerHostNetTcp = null;
-            }
-
-            // HTTP SERVICE
-            try
-            {
-                eyeTrackerHostWeb = new ServiceHost(eyeTracker, new Uri[] { new Uri("http://localhost:" + (newEyeTracker.Settings.ServiceListeningPort + 1) + "/EyeTrackerEndpoint") });
-                eyeTrackerHostWeb.AddServiceEndpoint(typeof(IEyeTrackerWebService), new BasicHttpBinding(), "Soap");
-                var endpoint = eyeTrackerHostWeb.AddServiceEndpoint(typeof(IEyeTrackerWebService), new WebHttpBinding(WebHttpSecurityMode.None), "Web");
-                endpoint.EndpointBehaviors.Add(new WebHttpBehavior());
-                eyeTrackerHostWeb.Open();
-                Trace.WriteLine(eyeTrackerHostWeb.State);
-                Trace.WriteLine(eyeTrackerHostWeb.Description);
-                Trace.WriteLine(eyeTrackerHostWeb.Credentials);
-                if (eyeTrackerHostWeb.BaseAddresses.Count > 0)
-                    Trace.WriteLine(eyeTrackerHostWeb.BaseAddresses[0].ToString());
-
-                Trace.WriteLine(endpoint.Address);
-                Trace.WriteLine(endpoint.ListenUri);
-                Trace.WriteLine(endpoint.ListenUriMode);
-                Trace.WriteLine(endpoint.EndpointBehaviors[0]);
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine("Error starting WEB service: " + ex.Message);
-
-
-                Trace.WriteLine("==== INSTRUCTIONS ==========================================================");
-                Trace.WriteLine("After running the server for the first time you should open the command line");
-                Trace.WriteLine("in administrator mode and run the following command to enable the service.");
-                Trace.WriteLine($"netsh http add urlacl url = http://+:{newEyeTracker.Settings.ServiceListeningPort + 1}/EyeTrackerEndpoint/ user=username");
-                Trace.WriteLine("After running the command and starting the eye tracker you can open the browser ");
-                Trace.WriteLine($"http://localhost:{newEyeTracker.Settings.ServiceListeningPort + 1}/EyeTrackerEndpoint/Web/StartRecording");
-                Trace.WriteLine($"Or from a different computer using the correct IP address");
-                Trace.WriteLine("==== END INSTRUCTIONS ==========================================================");
-
-
-                eyeTrackerHostWeb = null;
+                Trace.WriteLine("Error starting the web server: " + ex.Message);
+                eyeTrackerWebServer = null;
             }
 
             // TCP SERVICE socket
@@ -115,19 +68,17 @@ namespace OpenIris
                 eyeTrackerHostUdp = null;
             }
 
-
-            // HTTP SERVICE FROM CLEVELAND DO NOT CHANGE
-            //Need to run something like this in the command line. 
-            //netsh http add urlacl url = http://+:9001/EyeTrackerEndpoint/ user=jorge
-            // https://docs.microsoft.com/en-us/dotnet/framework/wcf/feature-details/how-to-create-a-basic-wcf-web-http-service
-            //
-            //var host = new ServiceHost(typeof(EyeTrackerRemoteService), new Uri[] { new Uri("http://10.77.17.88:" + EyeTrackerRemoteService.EyeTracker.Settings.ServiceListeningPort + "/EyeTrackerEndpoint") });
-            //host.AddServiceEndpoint(typeof(IEyeTrackerService), new BasicHttpBinding(), "Soap");
-            //var endpoint = host.AddServiceEndpoint(typeof(IEyeTrackerService), new WebHttpBinding(), "Web");
-            //endpoint.EndpointBehaviors.Add(new WebHttpBehavior());
-            //host.Open();
-
-            // END HTTP SERVICE FROM CLEVELAND DO NOT CHANGE
+            // LSL OUTLET (data sink running in parallel with any eye tracking system)
+            try
+            {
+                eyeTrackerLslOutlet = new EyeTrackerLslOutlet(newEyeTracker);
+                eyeTrackerLslOutlet.Start();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("Error starting LSL outlet: " + ex.Message);
+                eyeTrackerLslOutlet = null;
+            }
         }
 
         /// <summary>
@@ -137,10 +88,10 @@ namespace OpenIris
         {
             try
             {
-                eyeTrackerHostNetTcp?.Close();
-                eyeTrackerHostWeb?.Close();
+                eyeTrackerWebServer?.Dispose();
                 eyeTrackerHostTcp?.Stop();
                 eyeTrackerHostUdp?.Stop();
+                eyeTrackerLslOutlet?.Stop();
             }
             catch (Exception ex)
             {

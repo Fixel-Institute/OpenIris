@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackerSettings.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -11,12 +12,6 @@ namespace OpenIris
     using System.Collections.Generic;
     using System.ComponentModel;
     using System.Linq;
-    using System.Windows.Forms;
-
-
-    //
-    // TODO: consider using ApplicateSettingsBase. I tried but I could not get it to serialized properly.
-    //
 
 
     /// <summary>
@@ -40,6 +35,15 @@ namespace OpenIris
         {
             Value = needsRestarting;
         }
+    }
+
+    /// <summary>
+    /// Marks a setting of <see cref="EyeTrackerSettings"/> that belongs to the computer rather than to
+    /// a settings profile: it is saved in OpenIrisSettings.xml and stays the same when switching profiles.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Property)]
+    public sealed class SharedSettingAttribute : Attribute
+    {
     }
 
     [Serializable]

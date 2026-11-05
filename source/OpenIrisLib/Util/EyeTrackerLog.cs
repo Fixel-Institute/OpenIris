@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyeTrackerLog.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris
@@ -50,7 +51,13 @@ namespace OpenIris
         /// Writes a log message.
         /// </summary>
         /// <param name="message">Message to be logged.</param>
-        public override void Write(string message) => base.Write(DateTime.Now.ToString("HH:mm:ss") + " - " + message);
+        public override void Write(string message) => base.Write(DateTime.Now.ToString("HH:mm:ss.fff") + " - " + message);
+
+        /// <summary>
+        /// Writes text as it is, without the time, only to this log (not to the other listeners).
+        /// </summary>
+        /// <param name="text">Text to write.</param>
+        public void WriteBlock(string text) => base.Write(text);
 
         /// <summary>
         /// Writes a log message with a line break at the end.

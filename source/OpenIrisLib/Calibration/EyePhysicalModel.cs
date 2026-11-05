@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EyePhysicalModel.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------                            
 namespace OpenIris
@@ -24,6 +25,14 @@ namespace OpenIris
         /// </summary>
         [TypeConverter(typeof(StructConverter<PointF>))]
         public PointF Center { get;  set; }
+
+        /// <summary>
+        /// Gets or sets the depth of the center of the globe: its distance from the camera along the
+        /// camera's axis, in the same pixel units as Center and Radius (millimeters / MmPerPix). With
+        /// Center, the center of the globe in 3D. 0 if unknown (weak perspective, as in calibration
+        /// files from before 0.2).
+        /// </summary>
+        public float CenterDepth { get; set; }
         
         /// <summary>
         /// Gets or sets the radius of the eye globe in pixels (camera coordinates).
@@ -112,7 +121,7 @@ namespace OpenIris
         /// <returns>True if equal.</returns>
         public bool Equals(EyePhysicalModel obj)
         {
-            return obj.Center == this.Center && obj.Radius == this.Radius;
+            return obj.Center == this.Center && obj.CenterDepth == this.CenterDepth && obj.Radius == this.Radius;
         }
 
         /// <summary>

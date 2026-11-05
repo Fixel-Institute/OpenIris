@@ -1,6 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="VideoEye.cs">
-//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley. All rights reserved.
+//     Copyright (c) 2014-2023 Jorge Otero-Millan, Johns Hopkins University, University of California, Berkeley.
+//     Licensed under the GNU Affero General Public License v3.0. See LICENSE in the repository root.
 // </copyright>
 //-----------------------------------------------------------------------
 namespace OpenIris.ImageGrabbing
@@ -42,11 +43,11 @@ namespace OpenIris.ImageGrabbing
         {
             WhichEye = whichEye;
             Video = new VideoCapture(fileName);
-            FrameRate = Video.GetCaptureProperty(CapProp.Fps);
-            NumberOfFrames = (long)Video.GetCaptureProperty(CapProp.FrameCount);
+            FrameRate = Video.Get(CapProp.Fps);
+            NumberOfFrames = (long)Video.Get(CapProp.FrameCount);
             FrameSize = new Size(
-                        (int)Video.GetCaptureProperty(CapProp.FrameWidth),
-                        (int)Video.GetCaptureProperty(CapProp.FrameHeight));
+                        (int)Video.Get(CapProp.FrameWidth),
+                        (int)Video.Get(CapProp.FrameHeight));
         }
         
         /// <summary>
@@ -106,10 +107,10 @@ namespace OpenIris.ImageGrabbing
             {
                 var image = GrabImageEyeFromVideo();
 
+                if (image == null) return null;
+
                 image.TimeStamp.TimeGrabbed = EyeTrackerDebug.TimeElapsed.TotalSeconds;
                 image.TimeStamp.DateTimeGrabbed = DateTime.Now;
-
-                if (image == null) return null;
 
                 if (LastFrameNumber > (long)image.TimeStamp.FrameNumber)
                         throw new InvalidOperationException("Frame numbers should keep growing.");
@@ -130,9 +131,9 @@ namespace OpenIris.ImageGrabbing
         /// <param name="frameNumber">Frame number to scroll to.</param>
         public void Scroll(ulong frameNumber)
         {
-            if (frameNumber != Video.GetCaptureProperty(CapProp.PosFrames))
+            if (frameNumber != Video.Get(CapProp.PosFrames))
             {
-                Video.SetCaptureProperty(CapProp.PosFrames, (double)frameNumber);
+                Video.Set(CapProp.PosFrames, (double)frameNumber);
             }
         }
 
@@ -141,9 +142,13 @@ namespace OpenIris.ImageGrabbing
         /// always monotonic. There could be dropped frames though. The <see
         /// cref="EyeTrackerImageGrabber"/> object will take care of it.
         /// </summary>
+        /// <remarks>
+        /// Does not call VideoCapture.Start. That starts an EmguCV thread that keeps grabbing frames
+        /// from the same capture at the same time as <see cref="GrabImageEyeFromVideo"/>, which is
+        /// not thread safe and skips frames.
+        /// </remarks>
         public void Start()
         {
-            Video.Start();
         }
 
         /// <summary>
@@ -152,8 +157,6 @@ namespace OpenIris.ImageGrabbing
         public void Stop()
         {
             stopping = true;
-
-            Video.Stop();
         }
 
         /// <summary>
@@ -164,14 +167,17 @@ namespace OpenIris.ImageGrabbing
         {
             // Set up the timestamp for the image
             var timestamp = new ImageEyeTimestamp(
-                seconds: Video.GetCaptureProperty(CapProp.PosMsec) / 1000,
-                frameNumber: (ulong)Video.GetCaptureProperty(CapProp.PosFrames),
-                frameNumberRaw: (ulong)Video.GetCaptureProperty(CapProp.PosFrames));
+                seconds: Video.Get(CapProp.PosMsec) / 1000,
+                frameNumber: (ulong)Video.Get(CapProp.PosFrames),
+                frameNumberRaw: (ulong)Video.Get(CapProp.PosFrames));
 
-            // Retrieve the new frame
-            var grayImage = Video.QueryFrame().ToImage<Gray, byte>();
+            // Retrieve the new frame. Pass the image itself to ImageEye, not grayImage.Bitmap: that
+            // Bitmap shares grayImage's memory, which the GC can free while it is still being copied.
+            using var frame = Video.QueryFrame()
+                ?? throw new InvalidOperationException($"Could not read frame {timestamp.FrameNumber} of the video.");
+            var grayImage = frame.ToImage<Gray, byte>();
 
-            var imageEye = new ImageEye(grayImage.Bitmap, WhichEye, timestamp);
+            var imageEye = new ImageEye(grayImage, WhichEye, timestamp, null) { Roi = new Rectangle(Point.Empty, grayImage.Size) };
             imageEye.CorrectOrientation(CameraOrientation);
 
             LastFrameNumber = (long)timestamp.FrameNumberRaw;
