@@ -67,11 +67,6 @@ namespace OpenIris
             eyeTracker.SetDataFolder(folder);
         }
 
-        public void SetDataFolder(string folder)
-        {
-            eyeTracker.SetDataFolder(folder);
-        }
-
         /// <summary>
         /// Waits for the next processed frame (up to 1 s) and returns all its data.
         /// </summary>
